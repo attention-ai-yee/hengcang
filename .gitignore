@@ -1,0 +1,12 @@
+node_modules/
+.next/
+coverage/
+playwright-report/
+test-results/
+data/*.db
+data/*.db-*
+.env
+.env.local
+*.tsbuildinfo
+.playwright-cli/
+output/playwright/*.png

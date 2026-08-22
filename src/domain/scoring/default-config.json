@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "scoreWeights": {
+    "cheapness": 0.5,
+    "fundamental": 0.3,
+    "trend": 0.2
+  },
+  "thresholds": {
+    "strongAdd": 75,
+    "lightAdd": 60,
+    "hold": 40,
+    "doNotAdd": 25,
+    "fundamentalCircuitBreaker": 35
+  },
+  "positionLimits": {
+    "singleStock": 0.08,
+    "thematicETF": 0.15
+  },
+  "signalRules": {
+    "confirmationTradingDays": 3,
+    "cooldownDays": 7
+  },
+  "history": {
+    "preferredYears": 5,
+    "minimumYearsForMediumConfidence": 3,
+    "lowConfidenceCoverage": 0.6
+  },
+  "portfolio": {
+    "baseCurrency": "CNY",
+    "reservedCash": 0
+  },
+  "componentWeights": {
+    "VALUE_DIVIDEND": {
+      "cheapness": { "pe": 0.35, "pb": 0.25, "dividendYield": 0.4 },
+      "fundamental": { "earningsGrowth": 0.4, "roe": 0.3, "dividendStability": 0.3 }
+    },
+    "TECH_GROWTH": {
+      "cheapness": { "forwardPe": 0.4, "ps": 0.2, "growthAdjustedValuation": 0.4 },
+      "fundamental": { "earningsGrowth": 0.4, "revenueGrowth": 0.3, "earningsRevision": 0.3 },
+      "fundamentalWithoutRevision": { "earningsGrowth": 0.55, "revenueGrowth": 0.45 }
+    },
+    "BROAD_EQUITY": {
+      "cheapness": { "pe": 0.4, "pb": 0.3, "equityRiskPremium": 0.3 },
+      "cheapnessWithoutErp": { "pe": 0.6, "pb": 0.4 },
+      "fundamental": { "indexEarningsGrowth": 0.6, "earningsRevision": 0.4 }
+    },
+    "GOLD": {
+      "cheapness": { "longTermPricePosition": 0.4, "distanceFromMa200": 0.35, "momentumCrowding": 0.25 },
+      "fundamental": { "realYield": 0.4, "dollar": 0.3, "etfFlow": 0.2, "centralBankDemand": 0.1 }
+    },
+    "trend": { "ma200": 0.4, "maAlignment": 0.3, "momentum6m": 0.3 }
+  }
+}

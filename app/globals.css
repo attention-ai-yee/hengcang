@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #17201c;
+  --muted: #66736d;
+  --line: #dce3de;
+  --surface: #ffffff;
+  --canvas: #f3f5f1;
+  --forest: #173f32;
+  --forest-soft: #dceae3;
+  --amber: #b87818;
+  --red: #b4453d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--canvas);
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 70% -20%, rgba(197, 219, 204, 0.55), transparent 34rem),
+    var(--canvas);
+  font-family: Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+a {
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.app-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 1px rgba(19, 45, 35, 0.03), 0 12px 32px rgba(19, 45, 35, 0.05);
+}
+
+.eyebrow {
+  color: #557064;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  border-bottom: 1px solid #e8ece9;
+  padding: 0.9rem 0.75rem;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.data-table th {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 900px) {
+  .product-shell {
+    grid-template-columns: 1fr !important;
+  }
+
+  .sidebar {
+    position: static !important;
+    height: auto !important;
+  }
+
+  .sidebar-nav {
+    display: flex !important;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .sidebar-nav a {
+    flex: 0 0 auto;
+  }
+}

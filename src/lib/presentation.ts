@@ -1,0 +1,41 @@
+import type { AssetBucket, RecommendationState } from "@/domain/types";
+
+export const BUCKET_LABELS: Record<AssetBucket, string> = {
+  CASH_BONDS: "现金与债券",
+  GOLD: "黄金",
+  VALUE_DIVIDEND: "红利与价值",
+  TECH_GROWTH: "科技与成长",
+  BROAD_EQUITY: "宽基权益",
+  OTHER: "其他",
+};
+
+export const INSTRUMENT_TYPE_LABELS: Record<string, string> = {
+  FUND: "基金",
+  STOCK: "股票",
+  ETF: "交易型开放式指数基金（ETF）",
+  CASH: "现金",
+  BOND: "债券",
+  GOLD: "黄金",
+  ACCOUNT_AGGREGATE: "账户汇总",
+};
+
+export function instrumentTypeLabel(instrumentType: string): string {
+  return INSTRUMENT_TYPE_LABELS[instrumentType] ?? instrumentType;
+}
+
+export const CONFIDENCE_LABELS = {
+  HIGH: "高可信度",
+  MEDIUM: "中可信度",
+  LOW: "低可信度",
+} as const;
+
+export const STATE_LABELS: Record<RecommendationState, string> = {
+  STRONG_ADD_ALLOWED: "明显机会，可考虑增配",
+  LIGHT_ADD_ALLOWED: "偏有吸引力，可小幅增配",
+  HOLD: "中性，持有 / 等待",
+  DO_NOT_ADD: "偏贵或偏弱，停止新增",
+  REDUCE_CONSIDER: "风险偏高，可考虑降低仓位",
+  OVERWEIGHT: "超配：停止新增，不强制卖出",
+  REASSESS_THESIS: "基本面恶化，重新评估逻辑",
+  LOW_CONFIDENCE: "数据可信度低，等待确认",
+};

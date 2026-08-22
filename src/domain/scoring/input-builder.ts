@@ -1,0 +1,79 @@
+import type {
+  AssetModelInput,
+  DirectScoreMetric,
+  MetricSeries,
+} from "./types";
+import type { ScorableAssetBucket } from "../types";
+import type { CanonicalMetricKey } from "@/metrics/catalog";
+import { derivePriceFeatures } from "@/metrics/derive-price-features";
+import type { MetricSeriesRepository } from "@/metrics/observation-repository";
+
+function directScore(series: MetricSeries): DirectScoreMetric {
+  return {
+    score: series.currentValue,
+    source: series.source,
+    asOf: series.asOf,
+    confidence: series.source === "manual" ? "LOW" : undefined,
+  };
+}
+
+export class ScoreInputBuilder {
+  constructor(private readonly repository: MetricSeriesRepository) {}
+
+  async build(bucket: ScorableAssetBucket, asOf: string): Promise<AssetModelInput> {
+    const load = (metricKey: CanonicalMetricKey) => this.repository.resolveSeries({ subjectId: bucket, metricKey, asOf });
+    const price = await load("PRICE_CLOSE");
+    const priceFeatures = derivePriceFeatures(price);
+
+    switch (bucket) {
+      case "VALUE_DIVIDEND": {
+        const [pe, pb, dividendYield, earningsGrowth, roe, dividendStability, fundamentalOverride] = await Promise.all([
+          load("PE_TTM"), load("PB"), load("DIVIDEND_YIELD"), load("EARNINGS_GROWTH"), load("ROE"),
+          load("DIVIDEND_STABILITY_SCORE"), load("FUNDAMENTAL_OVERRIDE_SCORE"),
+        ]);
+        return {
+          bucket, asOf, trend: priceFeatures.trend, pe, pb, dividendYield, earningsGrowth, roe,
+          dividendStability: directScore(dividendStability),
+          fundamentalOverride: fundamentalOverride.currentValue === null ? undefined : directScore(fundamentalOverride),
+        };
+      }
+      case "TECH_GROWTH": {
+        const [forwardPe, ps, expectedEarningsGrowth, peg, earningsGrowth, revenueGrowth, earningsRevision] = await Promise.all([
+          load("PE_FORWARD"), load("PS"), load("EXPECTED_EARNINGS_GROWTH"), load("PEG"),
+          load("EARNINGS_GROWTH"), load("REVENUE_GROWTH"), load("EARNINGS_REVISION"),
+        ]);
+        return {
+          bucket, asOf, trend: priceFeatures.trend, forwardPe, ps, expectedEarningsGrowth,
+          peg: peg.currentValue === null ? undefined : peg,
+          earningsGrowth, revenueGrowth,
+          earningsRevision: earningsRevision.currentValue === null ? undefined : earningsRevision,
+        };
+      }
+      case "BROAD_EQUITY": {
+        const [pe, pb, equityRiskPremium, indexEarningsGrowth, earningsRevision] = await Promise.all([
+          load("PE_TTM"), load("PB"), load("EQUITY_RISK_PREMIUM"), load("INDEX_EARNINGS_GROWTH"), load("EARNINGS_REVISION"),
+        ]);
+        return {
+          bucket, asOf, trend: priceFeatures.trend, pe, pb, indexEarningsGrowth,
+          equityRiskPremium: equityRiskPremium.currentValue === null ? undefined : equityRiskPremium,
+          earningsRevision: earningsRevision.currentValue === null ? undefined : earningsRevision,
+        };
+      }
+      case "GOLD": {
+        const [realYield, dollarIndex, etfFlow, centralBankDemand] = await Promise.all([
+          load("REAL_YIELD_10Y"), load("DOLLAR_INDEX"), load("GOLD_ETF_FLOW_3M"), load("CENTRAL_BANK_DEMAND_SCORE"),
+        ]);
+        return {
+          bucket, asOf, trend: priceFeatures.trend,
+          pricePosition: priceFeatures.pricePosition,
+          distanceFromMa200: priceFeatures.distanceFromMa200,
+          momentum3m: priceFeatures.momentum3m,
+          realYield,
+          dollarIndex,
+          etfFlow: etfFlow.currentValue === null ? undefined : etfFlow,
+          centralBankDemand: centralBankDemand.currentValue === null ? undefined : directScore(centralBankDemand),
+        };
+      }
+    }
+  }
+}

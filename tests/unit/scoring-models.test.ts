@@ -31,9 +31,8 @@ function modelInputs(): AssetModelInput[] {
       dividendStability: { score: 90, source: "TEST_AUTO", asOf: AS_OF },
     },
     {
-      bucket: "TECH_GROWTH", asOf: AS_OF, trend: trend(), forwardPe: series(20), ps: series(20),
-      expectedEarningsGrowth: series(30), peg: series(10), earningsGrowth: series(60),
-      revenueGrowth: series(50), earningsRevision: series(60),
+      bucket: "TECH_GROWTH", asOf: AS_OF, trend: trend(), pe: series(20), ps: series(20),
+      earningsGrowth: series(60), revenueGrowth: series(50), peg: series(10),
     },
     {
       bucket: "BROAD_EQUITY", asOf: AS_OF, trend: trend(), pe: series(20), pb: series(20),

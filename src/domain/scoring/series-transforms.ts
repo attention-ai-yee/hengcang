@@ -83,3 +83,49 @@ export function deriveChangeSeries(input: MetricSeries, lookbackDays: number): M
     coverage: input.coverage,
   };
 }
+
+/**
+ * 派生「比值」序列（如 PEG_TTM = PE_TTM / 已实现盈利增长%）。
+ * 点位按双方 asOf 对齐；分母做下限保护（默认 +1 个百分点）：负增长因此得到
+ * 极大的比值（最差分位），符合「高估值遇上盈利萎缩」的经济语义且避免符号翻转。
+ * availableAt = max(分子, 分母)、quality = worse —— 无前视。
+ */
+export function deriveRatioSeries(
+  numerator: MetricSeries,
+  denominator: MetricSeries,
+  options?: { minDenominator?: number; featureName?: string },
+): MetricSeries {
+  const minDenominator = options?.minDenominator ?? 1;
+  const featureName = options?.featureName ?? "RATIO";
+  const denByDate = new Map(denominator.history.map((point) => [point.asOf, point]));
+  const history: HistoricalObservation[] = [];
+  for (const point of numerator.history) {
+    const den = denByDate.get(point.asOf);
+    if (!den) continue;
+    const safeDen = Math.max(den.value, minDenominator);
+    if (!Number.isFinite(safeDen) || safeDen <= 0) continue;
+    history.push({
+      value: point.value / safeDen,
+      asOf: point.asOf,
+      availableAt: maxAvailableAt(point.availableAt ?? point.asOf + "T00:00:00Z", den.availableAt ?? den.asOf + "T00:00:00Z") ?? point.asOf + "T00:00:00Z",
+      quality: worseQuality(point.quality, den.quality),
+    });
+  }
+  let currentValue: number | null = null;
+  if (numerator.currentValue !== null && Number.isFinite(numerator.currentValue) && denominator.currentValue !== null && Number.isFinite(denominator.currentValue)) {
+    currentValue = numerator.currentValue / Math.max(denominator.currentValue, minDenominator);
+  }
+  const latest = history.at(-1);
+  return {
+    currentValue,
+    history,
+    source: "DERIVED:" + featureName + ":" + denominator.source,
+    asOf: latest?.asOf ?? numerator.asOf,
+    availableAt: latest?.availableAt ?? numerator.availableAt,
+    quality: worseQuality(numerator.quality, denominator.quality),
+    coverage:
+      numerator.coverage !== undefined && denominator.coverage !== undefined
+        ? Math.min(numerator.coverage, denominator.coverage)
+        : numerator.coverage ?? denominator.coverage,
+  };
+}

@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "scoreWeights": {
     "cheapness": 0.5,
     "fundamental": 0.3,
@@ -46,16 +46,11 @@
     },
     "TECH_GROWTH": {
       "cheapness": {
-        "forwardPe": 0.4,
-        "ps": 0.2,
-        "growthAdjustedValuation": 0.4
+        "pe": 0.45,
+        "ps": 0.25,
+        "growthAdjustedValuation": 0.3
       },
       "fundamental": {
-        "earningsGrowth": 0.4,
-        "revenueGrowth": 0.3,
-        "earningsRevision": 0.3
-      },
-      "fundamentalWithoutRevision": {
         "earningsGrowth": 0.55,
         "revenueGrowth": 0.45
       }

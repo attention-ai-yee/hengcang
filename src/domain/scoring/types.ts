@@ -80,15 +80,19 @@ export interface ValueDividendInput extends BaseModelInput {
   fundamentalOverride?: DirectScoreMetric;
 }
 
+/**
+ * 科技成长 v1.4（Route B，TTM 已实现基本面模型）：
+ * 不再假装知道未来——去掉 Forward PE 代理、一致预期增长与盈利修正，
+ * 用真实 PE_TTM/PS 加上 PE×实际增长的确定性 PEG 变换回答
+ * 「按照已经发生的盈利和估值，现在科技贵不贵」。
+ */
 export interface TechGrowthInput extends BaseModelInput {
   bucket: "TECH_GROWTH";
-  forwardPe: MetricSeries;
+  pe: MetricSeries;
   ps: MetricSeries;
-  expectedEarningsGrowth: MetricSeries;
-  peg?: MetricSeries;
   earningsGrowth: MetricSeries;
   revenueGrowth: MetricSeries;
-  earningsRevision?: MetricSeries;
+  peg?: MetricSeries;
 }
 
 export interface BroadEquityInput extends BaseModelInput {

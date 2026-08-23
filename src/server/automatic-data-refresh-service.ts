@@ -55,7 +55,6 @@ function metricRows(bucket: ScorableAssetBucket, result: Extract<ProviderResult<
 function aggregateRows(bucket: ScorableAssetBucket, results: AggregateMetricResult[], asOf: string, fetchedAt: string): ProviderMetricObservationInput[] {
   return results.flatMap((result): ProviderMetricObservationInput[] => result.value === null ? [] : [{ subjectType: "ASSET_BUCKET", subjectId: bucket, metricKey: result.metricKey, value: result.value.toFixed(8), unit: result.metricKey === "DIVIDEND_YIELD" || result.metricKey === "ROE" || result.metricKey.includes("GROWTH") ? "percent" : "ratio", provider: AGGREGATE_PROVIDER, observedAt: `${result.effectiveDate || asOf}T15:00:00+08:00`, availableAt: `${asOf}T18:00:00+08:00`, asOf, fetchedAt, quality: result.quality, metadataJson: JSON.stringify({ constituentCoverage: result.constituentCoverage, constituentCount: result.constituentCount, validConstituentCount: result.validConstituentCount, effectiveDate: result.effectiveDate }) }]);
 }
-function forwardPeProxy(rows: ProviderMetricObservationInput[]): ProviderMetricObservationInput[] { return rows.filter((row) => row.metricKey === "PE_TTM").map((row) => ({ ...row, metricKey: "PE_FORWARD", provider: "tushare-derived-forward-pe", quality: "PARTIAL", metadataJson: JSON.stringify({ proxy: "PE_TTM", label: "Forward PE（TTM 代理）" }) })); }
 /**
  * 从数据库历史 + 本次抓取行合并出 price/pe 序列，再按【日历约一年】(>=360 天) 的
  * 最近前值计算 EPS(price/pe) 同比增速（Code Review H7）：
@@ -224,7 +223,7 @@ async function refreshAggregatedValuation(provider: TushareProvider, proxies: Tu
       const weightInfo = readWeightsWithAge(proxy.symbol, date, warnings); if (!weightInfo) { warnings.push(`${proxy.label}缺少 ${date} 前可用的成分权重`); continue; }
       const weights = weightInfo.points;
       const metrics = degradeQuality([aggregateHarmonicMetric("PE_TTM", weights, daily.data), aggregateHarmonicMetric("PB", weights, daily.data), aggregateHarmonicMetric("PS", weights, daily.data), aggregateDividendYield(weights, daily.data)], weightInfo.stale);
-      const allowed = proxy.bucket === "VALUE_DIVIDEND" ? metrics : proxy.bucket === "TECH_GROWTH" ? metrics.filter((item) => item.metricKey === "PS") : metrics.filter((item) => item.metricKey === "PE_TTM" || item.metricKey === "PB");
+      const allowed = proxy.bucket === "VALUE_DIVIDEND" ? metrics : proxy.bucket === "TECH_GROWTH" ? metrics.filter((item) => item.metricKey === "PS" || item.metricKey === "PE_TTM") : metrics.filter((item) => item.metricKey === "PE_TTM" || item.metricKey === "PB");
       output.push(...aggregateRows(proxy.bucket, allowed, date, fetchedAt));
     }
   }
@@ -342,8 +341,7 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
     const warning = providerMessage(direct, `${proxy.label}官方指数估值`); if (warning) warnings.push(warning);
     if (direct.ok) byBucket.set(proxy.bucket, [...(byBucket.get(proxy.bucket) ?? []), ...metricRows(proxy.bucket, direct)]);
   }));
-  const techRows = byBucket.get("TECH_GROWTH") ?? []; byBucket.set("TECH_GROWTH", [...techRows, ...forwardPeProxy(techRows)]);
-    // FRED 序列廉价且一次性请求即可拉全：固定 5 年窗口，避免增量模式把实际利率/
+      // FRED 序列廉价且一次性请求即可拉全：固定 5 年窗口，避免增量模式把实际利率/
   // 美元指数的历史压到 1 年内而把黄金基本面钉在 LOW（置信度年限不足）。
   const goldMacro = await refreshGoldMacro(fred, { start: yearsBefore(end, 5), end }, fredWarnings);
   byBucket.set("GOLD", [...(byBucket.get("GOLD") ?? []), ...goldMacro.rows, ...await refreshGoldEtfFlow(provider, { start: fullBackfill ? range.start : yearsBefore(end, 1), end }, warnings)]);

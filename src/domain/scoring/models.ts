@@ -158,50 +158,20 @@ function calculateValueDividend(input: ValueDividendInput) {
 
 function calculateTechGrowth(input: TechGrowthInput) {
   const weights = DEFAULT_SCORING_CONFIG.componentWeights.TECH_GROWTH;
-  const forwardPe = scoreHistoricalMetric(input.forwardPe, weights.cheapness.forwardPe, "LOWER_IS_BETTER", input.asOf);
-  let growthAdjusted: ScoreComponentResult;
-  if (input.expectedEarningsGrowth.currentValue !== null && input.expectedEarningsGrowth.currentValue <= 0) {
-    growthAdjusted = {
-      rawValue: input.expectedEarningsGrowth.currentValue,
-      percentile: null,
-      score: forwardPe.score === null ? null : Math.min(30, forwardPe.score),
-      weight: weights.cheapness.growthAdjustedValuation,
-      source: input.expectedEarningsGrowth.source,
-      asOf: input.asOf,
-      confidence: forwardPe.confidence,
-      quality: forwardPe.quality,
-      coverage: forwardPe.coverage,
-    };
-  } else if (input.peg) {
-    growthAdjusted = scoreHistoricalMetric(input.peg, weights.cheapness.growthAdjustedValuation, "LOWER_IS_BETTER", input.asOf);
-  } else {
-    growthAdjusted = {
-      rawValue: null,
-      percentile: null,
-      score: null,
-      weight: weights.cheapness.growthAdjustedValuation,
-      source: input.forwardPe.source,
-      asOf: input.asOf,
-      confidence: "LOW",
-      quality: input.forwardPe.quality,
-      coverage: input.forwardPe.coverage,
-    };
-  }
+  // 科技 v1.4（Route B）：估值支柱 = PE_TTM 45% + PS 25% + PEG_TTM 30%（确定性变换）；
+  // 基本面支柱 = 已实现盈利增长 55% + 营收增长 45%。不再消费 PARTIAL 前瞻代理。
+  const growthAdjusted: ScoreComponentResult = input.peg
+    ? scoreHistoricalMetric(input.peg, weights.cheapness.growthAdjustedValuation, "LOWER_IS_BETTER", input.asOf)
+    : { rawValue: null, percentile: null, score: null, weight: weights.cheapness.growthAdjustedValuation, source: "UNAVAILABLE", asOf: input.asOf, confidence: "LOW" };
   const cheapness = combineComponents({
-    forwardPe,
+    pe: scoreHistoricalMetric(input.pe, weights.cheapness.pe, "LOWER_IS_BETTER", input.asOf),
     ps: scoreHistoricalMetric(input.ps, weights.cheapness.ps, "LOWER_IS_BETTER", input.asOf),
     growthAdjustedValuation: growthAdjusted,
   });
-  const fundamental = input.earningsRevision
-    ? combineComponents({
-        earningsGrowth: scoreHistoricalMetric(input.earningsGrowth, weights.fundamental.earningsGrowth, "HIGHER_IS_BETTER", input.asOf),
-        revenueGrowth: scoreHistoricalMetric(input.revenueGrowth, weights.fundamental.revenueGrowth, "HIGHER_IS_BETTER", input.asOf),
-        earningsRevision: scoreHistoricalMetric(input.earningsRevision, weights.fundamental.earningsRevision, "HIGHER_IS_BETTER", input.asOf),
-      })
-    : combineComponents({
-        earningsGrowth: scoreHistoricalMetric(input.earningsGrowth, weights.fundamentalWithoutRevision.earningsGrowth, "HIGHER_IS_BETTER", input.asOf),
-        revenueGrowth: scoreHistoricalMetric(input.revenueGrowth, weights.fundamentalWithoutRevision.revenueGrowth, "HIGHER_IS_BETTER", input.asOf),
-      });
+  const fundamental = combineComponents({
+    earningsGrowth: scoreHistoricalMetric(input.earningsGrowth, weights.fundamental.earningsGrowth, "HIGHER_IS_BETTER", input.asOf),
+    revenueGrowth: scoreHistoricalMetric(input.revenueGrowth, weights.fundamental.revenueGrowth, "HIGHER_IS_BETTER", input.asOf),
+  });
   return { cheapness, fundamental, trend: calculateTrend(input.trend, input.asOf) };
 }
 

@@ -50,8 +50,12 @@ function historyConfidence(metric: MetricSeries, evaluationDate: string): Confid
   const years = fullYearsBetween(earliest, evaluationDate);
   if (years < DEFAULT_SCORING_CONFIG.history.mediumYears) return "LOW";
   const containsPartial = metric.quality === "PARTIAL" || history.some((point) => point.quality === "PARTIAL");
-  if (containsPartial || metric.source.toUpperCase().includes("DERIVED")) return "MEDIUM";
-  // v1.1 §§：VALID 且 ≥ 3 个完整日历年 → HIGH 候选（Code Review M11 定权威版本）
+  // 纯价格技术特征（DERIVED:<特征>:<主源>，如 MA60/MOMENTUM_6M）由主行情推导，
+  // 继承主数据源的年限可信度——v1.1 示例明确趋势支柱可为 HIGH。
+  // §27 的衍生封顶针对基本面估计代理（provider 形如 tushare-derived，无冒号尾缀），不受影响。
+  const isPriceFeature = metric.source.startsWith("DERIVED:") && (metric.source.match(/:/g) ?? []).length === 2;
+  if (containsPartial || (!isPriceFeature && metric.source.toUpperCase().includes("DERIVED"))) return "MEDIUM";
+  // v1.1：VALID 且 >= 3 个完整日历年 -> HIGH 候选（Code Review M11 定权威版本）
   return years >= DEFAULT_SCORING_CONFIG.history.highYears ? "HIGH" : "MEDIUM";
 }
 

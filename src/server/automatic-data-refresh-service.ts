@@ -132,6 +132,50 @@ function derivedEarningsGrowth(bucket: Exclude<ScorableAssetBucket, "GOLD">, row
   });
 }
 
+/**
+ * ERP = 盈利收益率(100/PE_TTM) − 10 年实际利率（补全宽基权益便宜度支柱的缺失指标）。
+ * 两个输入都是已入库的主数据序列；按 asOf 对齐取最近一期实际利率。
+ */
+function deriveEquityRiskPremium(bucket: 'BROAD_EQUITY', runRows: ProviderMetricObservationInput[], evaluationEnd: string, fetchedAt: string): ProviderMetricObservationInput[] {
+  const realYields = bucketMetricHistory("GOLD", ["REAL_YIELD_10Y"])
+    .map((row) => ({ asOf: row.asOf, value: Number(row.value) }))
+    .filter((point) => Number.isFinite(point.value))
+    .sort((first, second) => first.asOf.localeCompare(second.asOf));
+  if (!realYields.length) return [];
+  const pes = new Map<string, number>();
+  for (const row of [...bucketMetricHistory(bucket, ["PE_TTM"]), ...runRows.filter((row) => row.metricKey === "PE_TTM")]) {
+    const value = Number(row.value);
+    if (Number.isFinite(value) && value > 0) pes.set(row.asOf, value); // 本次运行行覆盖同日历史
+  }
+  const output: ProviderMetricObservationInput[] = [];
+  for (const [asOf, pe] of Array.from(pes.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+    if (asOf > evaluationEnd) continue;
+    let realYield: number | null = null;
+    for (const point of realYields) {
+      if (point.asOf <= asOf) realYield = point.value;
+      else break;
+    }
+    if (realYield === null || realYield <= -90) continue; // 实际利率缺失或异常时不产出
+    const erp = 100 / pe - realYield;
+    if (!Number.isFinite(erp)) continue;
+    output.push({
+      subjectType: "ASSET_BUCKET",
+      subjectId: bucket,
+      metricKey: "EQUITY_RISK_PREMIUM",
+      value: erp.toFixed(6),
+      unit: "percent",
+      provider: "tushare-derived",
+      observedAt: `${asOf}T15:00:00+08:00`,
+      availableAt: `${asOf}T18:00:00+08:00`,
+      asOf,
+      fetchedAt,
+      quality: "VALID",
+      metadataJson: JSON.stringify({ formula: "100/PE_TTM - REAL_YIELD_10Y" }),
+    });
+  }
+  return output;
+}
+
 function needsInitialHistory() { return !getDatabase().select({ id: metricObservations.id }).from(metricObservations).where(eq(metricObservations.metricKey, "PRICE_CLOSE")).limit(1).get(); }
 function removeInvalidLegacyRealYield() {
   // Before v1.1 the Tushare us_trycr y10 field was stored as REAL_YIELD_10Y.
@@ -249,12 +293,15 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
     if (direct.ok) byBucket.set(proxy.bucket, [...(byBucket.get(proxy.bucket) ?? []), ...metricRows(proxy.bucket, direct)]);
   }));
   const techRows = byBucket.get("TECH_GROWTH") ?? []; byBucket.set("TECH_GROWTH", [...techRows, ...forwardPeProxy(techRows)]);
-  const goldMacro = await refreshGoldMacro(fred, range, fredWarnings);
+    // FRED 序列廉价且一次性请求即可拉全：固定 5 年窗口，避免增量模式把实际利率/
+  // 美元指数的历史压到 1 年内而把黄金基本面钉在 LOW（置信度年限不足）。
+  const goldMacro = await refreshGoldMacro(fred, { start: yearsBefore(end, 5), end }, fredWarnings);
   byBucket.set("GOLD", [...(byBucket.get("GOLD") ?? []), ...goldMacro.rows, ...await refreshGoldEtfFlow(provider, { start: fullBackfill ? range.start : yearsBefore(end, 1), end }, warnings)]);
   const fundamentalRows = await refreshFundamentals(provider, proxies, end, range, fullBackfill, warnings, fetchedAt); const allRows = [...fundamentalRows.filter((row) => row.subjectType === "INSTRUMENT")];
   for (const row of fundamentalRows.filter((row) => row.subjectType === "ASSET_BUCKET")) byBucket.set(row.subjectId as ScorableAssetBucket, [...(byBucket.get(row.subjectId as ScorableAssetBucket) ?? []), row]);
   byBucket.set("VALUE_DIVIDEND", [...(byBucket.get("VALUE_DIVIDEND") ?? []), ...await refreshDividendStability(provider, proxies.find((item) => item.bucket === "VALUE_DIVIDEND"), end, fullBackfill, warnings, fetchedAt)]);
   for (const bucket of ["VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"] as const) { const rows = byBucket.get(bucket) ?? []; const target = bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH" : "EARNINGS_GROWTH"; if (!rows.some((row) => row.metricKey === target && row.provider === AGGREGATE_PROVIDER)) allRows.push(...derivedEarningsGrowth(bucket, rows, fetchedAt)); }
+  allRows.push(...deriveEquityRiskPremium("BROAD_EQUITY", byBucket.get("BROAD_EQUITY") ?? [], end, fetchedAt));
   allRows.push(...Array.from(byBucket.values()).flat()); const commit = commitProviderMetricObservations(allRows); const reports: BucketRefreshReport[] = [];
   for (const proxy of proxies) { const rows = allRows.filter((row) => row.subjectType === "ASSET_BUCKET" && row.subjectId === proxy.bucket); const latestAsOf = rows.reduce<string | null>((latest, row) => !latest || row.asOf > latest ? row.asOf : latest, null); const score = latestAsOf ? await refreshScoresForBuckets([{ bucket: proxy.bucket, asOf: latestAsOf }]) : []; reports.push({ bucket: proxy.bucket, proxy: proxy.label, symbol: proxy.symbol, observationCount: rows.length, latestAsOf, scoreSaved: score[0]?.saved ?? false, warnings }); }
   const status = reports.some((report) => report.observationCount > 0) ? (warnings.length ? "DEGRADED" : "READY") : "ERROR"; saveProviderStatus("tushare", status, fetchedAt, warnings, { index_dailybasic: directCapability, index_weight: "READY", daily_basic: "READY", fina_indicator: fullBackfill ? "REQUESTED" : "INCREMENTAL_PENDING", fund_share: "READY", fund_nav: "READY" }); // FRED 状态独立评估（Code Review M13）：不凭环境变量标 READY，也不把 FRED 失败算进 tushare。

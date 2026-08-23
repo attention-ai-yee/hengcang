@@ -3,10 +3,12 @@ import { fullYearsBetween, scoreHistoricalMetric } from "@/domain/scoring/percen
 import type { MetricSeries } from "@/domain/scoring/types";
 
 /**
- * 回归测试（Code Review H4 + M11）：
+ * 回归测试（Code Review H4 + M11 + 置信度溯源修正）：
  * - 年限按完整日历年计算（不能用 Δms/365.25，闰日会把恰好 N 年算成 N-ε）；
  * - 权威阈值为 v1.1：VALID 且 ≥3 个完整日历年 → HIGH 候选；≥1 年 → MEDIUM；
- *   PARTIAL 或 derived 来源封顶 MEDIUM；manual 恒为 LOW。
+ * - PARTIAL 封顶 MEDIUM；manual 恒为 LOW；
+ * - 纯价格技术特征（DERIVED:<特征>:<主源>）继承主源年限可信度，
+ *   而基本面估计代理（tushare-derived 等）永远封顶 MEDIUM。
  */
 const EVAL_DATE = "2026-08-23";
 
@@ -28,7 +30,7 @@ function confidenceFor(series: MetricSeries, evaluationDate = EVAL_DATE): "HIGH"
   return scoreHistoricalMetric(series, 1, "HIGHER_IS_BETTER", evaluationDate).confidence;
 }
 
-describe("置信度年限边界（H4/M11，权威 v1.1）", () => {
+describe("置信度年限与来源边界（H4/M11/溯源）", () => {
   it("fullYearsBetween 按日历年计算并正确处理闰日", () => {
     expect(fullYearsBetween("2021-08-23", "2026-08-23")).toBe(5);
     expect(fullYearsBetween("2021-08-23", "2026-08-22")).toBe(4);
@@ -51,10 +53,21 @@ describe("置信度年限边界（H4/M11，权威 v1.1）", () => {
     expect(confidenceFor(seriesFrom("2025-12-01"))).toBe("LOW");
   });
 
-  it("PARTIAL 或 derived 来源封顶 MEDIUM；manual 恒为 LOW", () => {
+  it("PARTIAL 封顶 MEDIUM；manual 恒为 LOW", () => {
     const fiveYearSeries = seriesFrom("2021-08-23");
     expect(confidenceFor({ ...fiveYearSeries, quality: "PARTIAL" })).toBe("MEDIUM");
-    expect(confidenceFor({ ...fiveYearSeries, source: "DERIVED:MA200:tushare" })).toBe("MEDIUM");
     expect(confidenceFor({ ...fiveYearSeries, source: "manual" })).toBe("LOW");
+  });
+
+  it("价格技术特征继承主源：DERIVED:<特征>:tushare 可达 HIGH", () => {
+    const fiveYearSeries = seriesFrom("2021-08-23");
+    expect(confidenceFor({ ...fiveYearSeries, source: "DERIVED:MOMENTUM_6M:tushare" })).toBe("HIGH");
+    expect(confidenceFor({ ...fiveYearSeries, source: "DERIVED:MA60:tushare" })).toBe("HIGH");
+  });
+
+  it("基本面估计代理（tushare-derived*）无论多久封顶 MEDIUM", () => {
+    const fiveYearSeries = seriesFrom("2021-08-23");
+    expect(confidenceFor({ ...fiveYearSeries, source: "tushare-derived" })).toBe("MEDIUM");
+    expect(confidenceFor({ ...fiveYearSeries, source: "tushare-derived-forward-pe" })).toBe("MEDIUM");
   });
 });

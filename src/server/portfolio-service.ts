@@ -27,6 +27,15 @@ function toDomainHolding(row: typeof holdings.$inferSelect): HoldingInput {
   };
 }
 
+function ensureDefaultPortfolio(now: string): void {
+  // 未初始化的新库第一次添加持仓不再裸 500（Code Review M20）。
+  const db = getDatabase();
+  const existing = db.select({ id: portfolios.id }).from(portfolios).where(eq(portfolios.id, DEFAULT_PORTFOLIO_ID)).get();
+  if (!existing) {
+    db.insert(portfolios).values({ id: DEFAULT_PORTFOLIO_ID, name: "默认组合", baseCurrency: "CNY", reservedCashMinor: "0", createdAt: now, updatedAt: now }).run();
+  }
+}
+
 export async function getPortfolioView() {
   const [rows, targets, portfolio, limits] = await Promise.all([
     listHoldings(),
@@ -36,8 +45,22 @@ export async function getPortfolioView() {
   ]);
   const reservedCashMinor = BigInt(portfolio?.reservedCashMinor ?? "0");
   const summary = summarizePortfolio(rows.map(toDomainHolding), reservedCashMinor);
+  // 预留资金逐笔扣除只在这一处实现（Code Review M15），视图层直接消费结果。
+  let remainingReserved = reservedCashMinor;
+  const investableByHolding = new Map<string, bigint>();
+  for (const row of rows) investableByHolding.set(row.id, BigInt(row.marketValueMinor));
+  const cashFirst = [...rows]
+    .filter((row) => row.assetBucket === "CASH_BONDS")
+    .sort((first, second) => Number(second.instrumentType === "CASH") - Number(first.instrumentType === "CASH"));
+  for (const row of cashFirst) {
+    const raw = BigInt(row.marketValueMinor);
+    const deduction = raw < remainingReserved ? raw : remainingReserved;
+    investableByHolding.set(row.id, raw - deduction);
+    remainingReserved -= deduction;
+  }
   // 单股/主题 ETF 硬上限（Code Review H6）：以可投资资产为分母逐持仓评估，
   // 超配 → OVERWEIGHT/WARNING；恰好到达上限（无法再增）→ WATCH。
+  const denominator = summary.investableAssetsMinor;
   const holdingRisks = rows.map((row) => ({
     id: row.id,
     name: row.name,
@@ -51,6 +74,7 @@ export async function getPortfolioView() {
         thematicEtfBps: limits?.thematicEtfBps ?? 1500,
       },
     }),
+    weightBps: denominator > 0n ? Number(((investableByHolding.get(row.id) ?? BigInt(row.marketValueMinor)) * 10_000n) / denominator) : 0,
   }));
   return {
     holdings: rows,
@@ -74,6 +98,7 @@ export async function getPortfolioView() {
 
 export async function createHolding(payload: HoldingPayload) {
   const now = new Date().toISOString();
+  ensureDefaultPortfolio(now);
   const record = {
     id: crypto.randomUUID(),
     portfolioId: DEFAULT_PORTFOLIO_ID,

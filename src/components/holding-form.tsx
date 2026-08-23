@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { shanghaiDate } from "@/lib/shanghai";
 
 function yuanToMinor(value: string): string {
   const [whole = "0", fraction = ""] = value.trim().split(".");
@@ -28,7 +29,7 @@ export function HoldingForm() {
         isThematicEtf: formData.get("isThematicEtf") === "on",
         isApproximate: formData.get("isApproximate") === "on",
         needsBreakdown: formData.get("needsBreakdown") === "on",
-        asOf: new Date().toISOString().slice(0, 10),
+        asOf: shanghaiDate(), // M14: 上海时区今天
       }),
     });
     setStatus(response.ok ? "已保存" : "保存失败，请检查输入");

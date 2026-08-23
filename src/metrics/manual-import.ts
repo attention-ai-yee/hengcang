@@ -38,8 +38,9 @@ const rowSchema = z.object({
   metricKey: z.enum(CANONICAL_METRIC_KEYS as [CanonicalMetricKey, ...CanonicalMetricKey[]]),
   value: z.string().trim().regex(/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/, "必须是有限十进制数"),
   unit: z.string().trim().min(1).max(32),
-  observedAt: z.string().trim().min(10).refine((value) => Number.isFinite(Date.parse(value)), "必须是有效日期或时间"),
-  availableAt: z.string().trim().min(10).refine((value) => Number.isFinite(Date.parse(value)), "必须是有效日期或时间"),
+  // 严格 ISO 8601 含时区（M7）：松散 Date.parse(“2026-8-9”) 可过，但下游 slice(0,10) 字典序比较会把该行静默排除出评分
+  observedAt: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/, "必须是带时区的 ISO 8601 时间（如 2026-08-09T15:00:00+08:00）").refine((value) => Number.isFinite(Date.parse(value)), "必须是有效时间"),
+  availableAt: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/, "必须是带时区的 ISO 8601 时间").refine((value) => Number.isFinite(Date.parse(value)), "必须是有效时间"),
   asOf: z.iso.date(),
 });
 

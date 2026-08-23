@@ -23,7 +23,11 @@ function directComponent(metric: DirectScoreMetric, weight: number): ScoreCompon
     weight,
     source: metric.source,
     asOf: metric.asOf,
-    confidence: metric.confidence ?? (metric.source.toUpperCase().includes("MANUAL") ? "LOW" : "HIGH"),
+    // PARTIAL 直分封顶中可信度（M10 / v1.1 §27）
+    confidence: (() => {
+      const declared = metric.confidence ?? (metric.source.toUpperCase().includes("MANUAL") ? "LOW" : "HIGH");
+      return metric.quality === "PARTIAL" ? worstConfidence([declared, "MEDIUM"]) : declared;
+    })(),
     quality: metric.quality,
     coverage: metric.coverage,
   };

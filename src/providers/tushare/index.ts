@@ -1,4 +1,4 @@
-import { fetchJson, providerFailure } from "../shared";
+import { fetchJson, HttpError, providerFailure } from "../shared";
 import { TushareRateLimiter } from "./rate-limiter";
 import type { DailyBasicRow, EquityFundamentalSnapshot, IndexWeightPoint } from "./index-aggregator";
 import type {
@@ -53,7 +53,16 @@ function isValue(value: unknown): value is string | number {
 function failureCode(response: TushareResponse) {
   const message = response.msg?.toLowerCase() ?? "";
   if (response.code === 2002 || message.includes("权限") || message.includes("积分")) return "PERMISSION_DENIED" as const;
-  if (message.includes("频次") || message.includes("limit")) return "RATE_LIMITED" as const;
+  // 真实限流文案形如“每分钟最多访问该接口N次”，不含 频次/limit 关键词（M3）。
+  if (
+    message.includes("频次") ||
+    message.includes("limit") ||
+    message.includes("每分钟最多") ||
+    message.includes("访问该接口") ||
+    message.includes("流控")
+  ) {
+    return "RATE_LIMITED" as const;
+  }
   return "UPSTREAM_ERROR" as const;
 }
 
@@ -78,7 +87,7 @@ export class TushareProvider implements MarketDataProvider {
             ? "sge_daily"
             : "daily";
       const dateField = request.instrumentKind === "FUND" ? "nav_date" : "trade_date";
-      const response = await this.query(apiName, {
+      const { response, truncated } = await this.query(apiName, {
         ts_code: request.symbol,
         start_date: request.range.start.replaceAll("-", ""),
         end_date: request.range.end.replaceAll("-", ""),
@@ -109,7 +118,7 @@ export class TushareProvider implements MarketDataProvider {
           currency: "CNY",
         }];
       });
-      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: "VALID" };
+      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: (truncated ? "PARTIAL" : "VALID") as "VALID" | "PARTIAL" };
     } catch (error) {
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Tushare 请求失败");
     }
@@ -122,7 +131,7 @@ export class TushareProvider implements MarketDataProvider {
     }
     try {
       const range = request.range ?? { start: request.asOf ?? "", end: request.asOf ?? "" };
-      const response = await this.query(
+      const { response, truncated } = await this.query(
         request.instrumentKind === "INDEX" ? "index_dailybasic" : "daily_basic",
         {
           ts_code: request.symbol,
@@ -156,7 +165,7 @@ export class TushareProvider implements MarketDataProvider {
           }];
         });
       });
-      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: "VALID" };
+      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: (truncated ? "PARTIAL" : "VALID") as "VALID" | "PARTIAL" };
     } catch (error) {
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Tushare 请求失败");
     }
@@ -169,7 +178,7 @@ export class TushareProvider implements MarketDataProvider {
     }
     try {
       const range = request.range ?? { start: request.asOf ?? "", end: request.asOf ?? "" };
-      const response = await this.query("fina_indicator", {
+      const { response, truncated } = await this.query("fina_indicator", {
         ts_code: request.symbol,
         start_date: range.start.replaceAll("-", ""),
         end_date: range.end.replaceAll("-", ""),
@@ -197,7 +206,7 @@ export class TushareProvider implements MarketDataProvider {
           }];
         });
       });
-      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: "VALID" };
+      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: (truncated ? "PARTIAL" : "VALID") as "VALID" | "PARTIAL" };
     } catch (error) {
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Tushare 请求失败");
     }
@@ -270,20 +279,59 @@ export class TushareProvider implements MarketDataProvider {
   private async rows<T>(apiName: string, params: Record<string, string>, fields: string, map: (row: TushareRow) => T[]): Promise<ProviderResult<T[]>> {
     if (!this.token) return providerFailure(this.id, "NOT_CONFIGURED", "缺少 TUSHARE_TOKEN");
     try {
-      const response = await this.query(apiName, params, fields);
+      const { response, truncated } = await this.query(apiName, params, fields);
       if (response.code !== 0 || !response.data) return providerFailure(this.id, failureCode(response), response.msg ?? "Tushare 返回错误");
-      return { ok: true, data: rowsOf(response).flatMap(map), provider: this.id, fetchedAt: new Date().toISOString(), quality: "VALID" };
+      return { ok: true, data: rowsOf(response).flatMap(map), provider: this.id, fetchedAt: new Date().toISOString(), quality: (truncated ? "PARTIAL" : "VALID") as "VALID" | "PARTIAL" };
     } catch (error) {
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Tushare 请求失败");
     }
   }
 
-  private query(apiName: string, params: Record<string, string>, fields: string) {
-    return this.limiter.run(() => fetchJson<TushareResponse>("https://api.tushare.pro", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_name: apiName, token: this.token, params, fields }),
-    }), () => true);
+  private static readonly PAGE_SIZE = 1000;
+  private static readonly MAX_PAGES = 30;
+
+  /**
+   * 分页拉全（Code Review M4）：Tushare 单次返回有行数上限，静默截断会让尾部数据
+   * 缺失却仍标 VALID。按 limit/offset 翻页直到不满页；打满 MAX_PAGES 视为截断，
+   * 由调用方降级 PARTIAL。
+   */
+  private async query(apiName: string, params: Record<string, string>, fields: string): Promise<{ response: TushareResponse; truncated: boolean }> {
+    const items: Array<Array<string | number | null>> = [];
+    let responseFields: string[] | undefined;
+    for (let page = 0; page < TushareProvider.MAX_PAGES; page += 1) {
+      const response = await this.limiter.run(
+        () => fetchJson<TushareResponse>("https://api.tushare.pro", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_name: apiName,
+            token: this.token,
+            params: { ...params, limit: TushareProvider.PAGE_SIZE, offset: page * TushareProvider.PAGE_SIZE },
+            fields,
+          }),
+        }),
+        (error) => TushareProvider.shouldRetryError(error),
+      );
+      if (response.code !== 0 || !response.data) {
+        if (items.length === 0) return { response, truncated: false };
+        break;
+      }
+      responseFields ??= response.data.fields;
+      items.push(...response.data.items);
+      if (response.data.items.length < TushareProvider.PAGE_SIZE) {
+        return { response: { code: 0, msg: null, data: { fields: responseFields, items } }, truncated: false };
+      }
+    }
+    return { response: { code: 0, msg: null, data: { fields: responseFields ?? [], items } }, truncated: true };
+  }
+
+  /** 权限类错误重试无意义且放大封禁风险（M3）；仅网络/5xx/429 可重试。 */
+  private static shouldRetryError(error: unknown): boolean {
+    if (error instanceof HttpError) {
+      if ([401, 402, 403].includes(error.status)) return false;
+      return error.status === 408 || error.status === 429 || error.status >= 500;
+    }
+    return true;
   }
 }
 

@@ -3,6 +3,17 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+function minorToYuanInput(minor: string): string {
+  const normalized = minor.replace(/^0+(?=\d)/, "") || "0";
+  const negative = normalized.startsWith("-");
+  const digits = negative ? normalized.slice(1) : normalized;
+  const whole = digits.slice(0, -2) || "0";
+  const fraction = digits.padStart(2, "0").slice(-2);
+  const body = fraction === "00" ? whole : whole + "." + fraction;
+  return negative ? "-" + body : body;
+}
+
+// 直接从分字符串格式化（Code Review M19）：Number 往返会把 0.50 元显示成 "1"，直接保存会改写存储值。
 function yuanToMinor(value: string): string {
   const [whole = "0", fraction = ""] = value.trim().split(".");
   return `${whole.replace(/^0+(?=\d)/, "")}${fraction.padEnd(2, "0").slice(0, 2)}`;
@@ -11,7 +22,7 @@ function yuanToMinor(value: string): string {
 export function ReservedCashForm({ initialMinor }: { initialMinor: string }) {
   const router = useRouter();
   const [status, setStatus] = useState("");
-  const initialYuan = (Number(initialMinor) / 100).toFixed(0);
+  const initialYuan = minorToYuanInput(initialMinor); // M19
 
   async function submit(formData: FormData) {
     setStatus("保存中…");

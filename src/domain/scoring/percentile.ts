@@ -48,10 +48,11 @@ function historyConfidence(metric: MetricSeries, evaluationDate: string): Confid
   if (history.length === 0) return "LOW";
   const earliest = history.reduce((min, point) => (point.asOf < min ? point.asOf : min), history[0].asOf);
   const years = fullYearsBetween(earliest, evaluationDate);
-  if (years < DEFAULT_SCORING_CONFIG.history.minimumYearsForMediumConfidence) return "LOW";
+  if (years < DEFAULT_SCORING_CONFIG.history.mediumYears) return "LOW";
   const containsPartial = metric.quality === "PARTIAL" || history.some((point) => point.quality === "PARTIAL");
   if (containsPartial || metric.source.toUpperCase().includes("DERIVED")) return "MEDIUM";
-  return years >= DEFAULT_SCORING_CONFIG.history.preferredYears ? "HIGH" : "MEDIUM";
+  // v1.1 §§：VALID 且 ≥ 3 个完整日历年 → HIGH 候选（Code Review M11 定权威版本）
+  return years >= DEFAULT_SCORING_CONFIG.history.highYears ? "HIGH" : "MEDIUM";
 }
 
 export function scoreHistoricalMetric(

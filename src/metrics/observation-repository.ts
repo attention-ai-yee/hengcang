@@ -37,9 +37,15 @@ export interface ProviderMetricObservationInput {
 }
 
 export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
+  private readonly seriesCache = new Map<string, MetricSeries>();
+
   constructor(private readonly policy: ProviderSelectionPolicy = {}) {}
 
   async resolveSeries(request: ResolveSeriesRequest): Promise<MetricSeries> {
+    // 同一构建器实例内同一序列只全量载入一次（Code Review M16）。
+    const cacheKey = `${request.subjectId}|${request.metricKey}|${request.asOf}`;
+    const cached = this.seriesCache.get(cacheKey);
+    if (cached) return cached;
     const rows = getDatabase()
       .select()
       .from(metricObservations)
@@ -64,7 +70,7 @@ export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
 
     const historyRows = Array.from(selected.values()).sort((first, second) => first.asOf.localeCompare(second.asOf));
     const latest = historyRows.at(-1);
-    return {
+    const series = {
       currentValue: latest ? Number(latest.value) : null,
       history: historyRows
         .map((row) => ({ value: Number(row.value), asOf: row.asOf, availableAt: row.availableAt, quality: row.quality as "VALID" | "PARTIAL" }))
@@ -75,6 +81,8 @@ export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
       quality: latest?.quality as "VALID" | "PARTIAL" | undefined,
       coverage: latest ? parseCoverage(latest.metadataJson) : undefined,
     };
+    this.seriesCache.set(cacheKey, series);
+    return series;
   }
 
   private isPreferred(
@@ -109,6 +117,7 @@ export function commitManualObservations(rows: ManualObservationInput[]) {
   const fetchedAt = new Date().toISOString();
   let inserted = 0;
   let updated = 0;
+  let failed = 0;
 
   db.transaction((transaction) => {
     for (const row of rows) {
@@ -120,7 +129,10 @@ export function commitManualObservations(rows: ManualObservationInput[]) {
           eq(metricObservations.subjectId, row.subjectId),
           eq(metricObservations.metricKey, row.metricKey),
           eq(metricObservations.provider, "manual"),
-          eq(metricObservations.asOf, row.asOf),
+          // 与唯一索引 metric_observation_unique 完全对齐（M8）：索引含 observedAt+availableAt 而不含 asOf，
+          // 按 asOf 查存在会漏判重，随后 INSERT 撞索引并回滚整个事务
+          eq(metricObservations.observedAt, row.observedAt),
+          eq(metricObservations.availableAt, row.availableAt),
         ))
         .get();
       const values = {
@@ -142,8 +154,15 @@ export function commitManualObservations(rows: ManualObservationInput[]) {
         transaction.update(metricObservations).set(values).where(eq(metricObservations.id, existing.id)).run();
         updated += 1;
       } else {
-        transaction.insert(metricObservations).values({ id: crypto.randomUUID(), ...values }).run();
-        inserted += 1;
+        try {
+          transaction.insert(metricObservations).values({ id: crypto.randomUUID(), ...values }).run();
+          inserted += 1;
+        } catch (error) {
+          // 残余的唯一约束冲突降级为行级跳过，不再回滚整个导入事务（M8）
+          const code = (error as { code?: string } | null)?.code ?? "";
+          if (!code.startsWith("SQLITE_CONSTRAINT")) throw error;
+          failed += 1;
+        }
       }
     }
 
@@ -162,7 +181,7 @@ export function commitManualObservations(rows: ManualObservationInput[]) {
       .run();
   });
 
-  return { inserted, updated, committed: rows.length, fetchedAt };
+  return { inserted, updated, failed, committed: rows.length, fetchedAt };
 }
 
 export function commitProviderMetricObservations(rows: ProviderMetricObservationInput[]) {

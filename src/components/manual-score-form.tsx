@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { shanghaiDate } from "@/lib/shanghai";
 
 const SCORE_FIELDS = [
   { name: "cheapnessScore", label: "便宜程度分", hint: "越高越便宜" },
@@ -23,7 +24,7 @@ export function ManualScoreForm() {
         cheapnessScore: Number(formData.get("cheapnessScore")),
         fundamentalScore: Number(formData.get("fundamentalScore")),
         trendScore: Number(formData.get("trendScore")),
-        asOf: new Date().toISOString().slice(0, 10),
+        asOf: shanghaiDate(), // M14: 上海时区今天
       }),
     });
     setStatus(response.ok ? "已生成低可信度评分快照" : "计算失败，请检查 0–100 的输入范围");

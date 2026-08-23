@@ -9,18 +9,8 @@ export const dynamic = "force-dynamic";
 
 export default async function HoldingsPage() {
   const view = await getPortfolioView();
-  const investableValues = new Map(view.holdings.map((holding) => [holding.id, BigInt(holding.marketValueMinor)]));
-  let remainingReserved = BigInt(view.summary.reservedCashMinor);
+  // 占比与预留资金扣除已在服务层统一计算（Code Review M15），这里只做展示。
   const risks = new Map(view.holdingRisks.map((risk) => [risk.id, risk]));
-  const reserveOrder = [...view.holdings]
-    .filter((holding) => holding.assetBucket === "CASH_BONDS")
-    .sort((first, second) => Number(second.instrumentType === "CASH") - Number(first.instrumentType === "CASH"));
-  for (const holding of reserveOrder) {
-    const value = investableValues.get(holding.id) ?? 0n;
-    const deduction = value < remainingReserved ? value : remainingReserved;
-    investableValues.set(holding.id, value - deduction);
-    remainingReserved -= deduction;
-  }
   return (
     <>
       <PageIntro
@@ -40,9 +30,7 @@ export default async function HoldingsPage() {
           <tbody>
             {view.holdings.map((holding) => {
               const value = BigInt(holding.marketValueMinor);
-              const investableValue = investableValues.get(holding.id) ?? value;
-              const denominator = BigInt(view.summary.investableAssetsMinor);
-              const bps = denominator > 0n ? Number((investableValue * 10_000n) / denominator) : 0;
+              const bps = risks.get(holding.id)?.weightBps ?? 0;
               const risk = risks.get(holding.id);
               return (
                 <tr key={holding.id}>

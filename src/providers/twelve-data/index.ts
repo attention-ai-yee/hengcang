@@ -1,4 +1,4 @@
-import { fetchJson, providerFailure } from "../shared";
+import { fetchJson, HttpError, httpFailure, providerFailure } from "../shared";
 import type {
   MacroRequest,
   MarketDataProvider,
@@ -53,6 +53,7 @@ export class TwelveDataProvider implements MarketDataProvider {
       }));
       return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: "VALID" };
     } catch (error) {
+      if (error instanceof HttpError) return httpFailure(this.id, error);
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Twelve Data 请求失败");
     }
   }

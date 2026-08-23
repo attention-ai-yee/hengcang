@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ASSET_BUCKETS } from "@/domain/types";
+import { shanghaiDate } from "@/lib/shanghai";
 
 export const holdingPayloadSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -54,8 +55,9 @@ export const manualScorePayloadSchema = z.object({
   cheapnessScore: z.number().min(0).max(100),
   fundamentalScore: z.number().int().min(0).max(100),
   trendScore: z.number().int().min(0).max(100),
-  asOf: z.iso.date(),
-});
+  // 不允许未来日期（M9）：未来快照会永久占据榜首
+  asOf: z.iso.date().refine((value) => value <= shanghaiDate(), "评分日期不能是未来（上海时区）"),
+})
 
 export const reservedCashPayloadSchema = z.object({
   reservedCashMinor: z.string().regex(/^\d+$/),

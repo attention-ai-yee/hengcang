@@ -13,8 +13,8 @@ export interface ScoringConfig {
   positionLimits: { singleStock: number; thematicETF: number };
   signalRules: { confirmationTradingDays: number; cooldownDays: number };
   history: {
-    preferredYears: number;
-    minimumYearsForMediumConfidence: number;
+    highYears: number;
+    mediumYears: number;
     mediumCoverage: number;
     highCoverage: number;
   };

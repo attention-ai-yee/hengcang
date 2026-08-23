@@ -1,4 +1,4 @@
-import { fetchJson, providerFailure } from "../shared";
+import { fetchJson, HttpError, httpFailure, providerFailure } from "../shared";
 import type {
   MacroRequest,
   MarketDataProvider,
@@ -12,6 +12,10 @@ import type {
 
 interface FredResponse {
   observations?: Array<{ date: string; value: string; realtime_start: string }>;
+}
+
+function nextDay(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 export const FRED_SERIES_MAP = {
@@ -47,11 +51,14 @@ export class FredProvider implements MarketDataProvider {
           value: observation.value,
           unit: request.seriesId === "REAL_YIELD_10Y" ? "percent" : "index",
           observedAt: `${observation.date}T00:00:00Z`,
-          availableAt: `${observation.realtime_start}T00:00:00Z`,
+          // 无前视（Code Review M12）：DFII10/DTWEXBGS 为 T+1 发布，availableAt 取
+          // 观察日次日晚间；不使用 realtime_start（未请求 vintage 时恒等于观察日）。
+          availableAt: `${nextDay(observation.date)}T18:00:00+08:00`,
           asOf: observation.date,
         }));
       return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: "VALID" };
     } catch (error) {
+      if (error instanceof HttpError) return httpFailure(this.id, error);
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "FRED 请求失败");
     }
   }

@@ -26,7 +26,13 @@ export async function GET() {
 }
 
 export async function PATCH(request: Request) {
-  const parsed = reservedCashPayloadSchema.safeParse(await request.json());
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return apiError("INVALID_JSON", "请求体必须是 JSON", 400);
+  }
+  const parsed = reservedCashPayloadSchema.safeParse(body);
   if (!parsed.success) return apiError("VALIDATION_ERROR", "预留资金格式无效", 422, zodFields(parsed.error));
 
   const [portfolio, holdings] = await Promise.all([getPortfolioRecord(), listHoldings()]);

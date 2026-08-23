@@ -21,8 +21,8 @@
     "cooldownDays": 7
   },
   "history": {
-    "preferredYears": 5,
-    "minimumYearsForMediumConfidence": 1,
+    "highYears": 3,
+    "mediumYears": 1,
     "mediumCoverage": 0.6,
     "highCoverage": 0.8
   },

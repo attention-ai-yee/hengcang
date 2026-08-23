@@ -20,6 +20,8 @@ function derivedSeries(
     source: `DERIVED:${name}:${input.source}`,
     asOf: latest?.asOf ?? input.asOf,
     availableAt: latest?.availableAt,
+    quality: input.quality,
+    coverage: input.coverage,
   };
 }
 
@@ -52,6 +54,8 @@ function distanceFromMovingAverage(price: MetricSeries, average: MetricSeries): 
     source: `DERIVED:DISTANCE_MA200:${price.source}`,
     asOf: latest?.asOf ?? price.asOf,
     availableAt: latest?.availableAt,
+    quality: price.quality,
+    coverage: price.coverage,
   };
 }
 
@@ -61,6 +65,8 @@ function point(series: MetricSeries): PointMetric {
     source: series.source,
     asOf: series.asOf,
     confidence: series.source === "UNAVAILABLE" ? "LOW" : undefined,
+    quality: series.quality,
+    coverage: series.coverage,
   };
 }
 

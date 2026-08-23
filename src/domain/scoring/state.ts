@@ -9,10 +9,18 @@ export function directionForState(state: RecommendationState): RecommendationDir
   return "NONE";
 }
 
+/**
+ * 普通候选状态需要连续 N 个交易日保持才切换。
+ * candidateHistoryDates 与 candidateHistory 一一对应（YYYY-MM-DD）：
+ * 提供时按【不同交易日】计数——同一天多次刷新产生的快照只计一次，
+ * 避免"盘中刷两次=两天"的双倍计数；日期断档不视为连续性破坏，
+ * 但同日重复无法凑足确认天数。
+ */
 export function confirmStateTransition(input: {
   previousState: RecommendationState;
   candidateState: RecommendationState;
   candidateHistory: RecommendationState[];
+  candidateHistoryDates?: string[];
   immediate: boolean;
   confirmationTradingDays?: number;
 }) {
@@ -20,8 +28,15 @@ export function confirmStateTransition(input: {
     return { state: input.candidateState, confirmed: true };
   }
   const required = input.confirmationTradingDays ?? DEFAULT_SCORING_CONFIG.signalRules.confirmationTradingDays;
-  const recent = [...input.candidateHistory, input.candidateState].slice(-required);
-  const confirmed = recent.length === required && recent.every((state) => state === input.candidateState);
+  const recentStates = [...input.candidateHistory, input.candidateState].slice(-required);
+  const statesMatch =
+    recentStates.length === required && recentStates.every((state) => state === input.candidateState);
+  let datesDistinct = true;
+  if (input.candidateHistoryDates) {
+    const priorDates = input.candidateHistoryDates.slice(-(required - 1));
+    datesDistinct = new Set(priorDates).size >= required - 1;
+  }
+  const confirmed = statesMatch && datesDistinct;
   return { state: confirmed ? input.candidateState : input.previousState, confirmed };
 }
 

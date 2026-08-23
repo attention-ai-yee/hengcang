@@ -15,7 +15,8 @@ export interface ScoringConfig {
   history: {
     preferredYears: number;
     minimumYearsForMediumConfidence: number;
-    lowConfidenceCoverage: number;
+    mediumCoverage: number;
+    highCoverage: number;
   };
   portfolio: { baseCurrency: string; reservedCash: number };
   componentWeights: typeof defaults.componentWeights;
@@ -33,6 +34,9 @@ export function assertScoringConfig(config: ScoringConfig): void {
   }
   if (fundamentalCircuitBreaker < 0 || fundamentalCircuitBreaker > 100) {
     throw new Error("基本面熔断阈值必须位于 0–100");
+  }
+  if (!(config.history.highCoverage >= config.history.mediumCoverage && config.history.mediumCoverage > 0)) {
+    throw new Error("可信度覆盖率阈值无效");
   }
 
   function validateWeightGroups(value: unknown, path: string): void {

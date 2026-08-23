@@ -9,6 +9,13 @@ export interface TushareScoreProxy {
   valuationMetrics: string[];
 }
 
+export function getGoldEtfProxies(): string[] {
+  const configured = process.env.TUSHARE_GOLD_ETF_PROXIES;
+  return (configured ? configured.split(",") : ["518880.SH", "159934.SZ"])
+    .map((symbol) => symbol.trim())
+    .filter(Boolean);
+}
+
 export function getTushareScoreProxies(): TushareScoreProxy[] {
   return [
     {

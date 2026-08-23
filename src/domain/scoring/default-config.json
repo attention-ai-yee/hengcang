@@ -22,8 +22,9 @@
   },
   "history": {
     "preferredYears": 5,
-    "minimumYearsForMediumConfidence": 3,
-    "lowConfidenceCoverage": 0.6
+    "minimumYearsForMediumConfidence": 1,
+    "mediumCoverage": 0.6,
+    "highCoverage": 0.8
   },
   "portfolio": {
     "baseCurrency": "CNY",

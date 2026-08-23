@@ -27,13 +27,31 @@ export function availableHistory(metric: MetricSeries, evaluationDate: string) {
   );
 }
 
+/**
+ * 计算两个 YYYY-MM-DD 之间跨越的完整日历年数。
+ * 不能用 Δms / 365.25 天：含一个闰日的"恰好 N 个日历年"（如规格回填窗口
+ * 2021-08-23 → 2026-08-23 = 1826 天）会被算成 4.9993 年，导致干净 5 年
+ * 历史永远拿不到 HIGH 置信度，进而把状态系统性封顶在 LIGHT_ADD_ALLOWED。
+ */
+export function fullYearsBetween(from: string, to: string): number {
+  const [fromYear, fromMonth, fromDay] = from.slice(0, 10).split("-").map(Number);
+  const [toYear, toMonth, toDay] = to.slice(0, 10).split("-").map(Number);
+  if ([fromYear, fromMonth, fromDay, toYear, toMonth, toDay].some((part) => !Number.isFinite(part))) return 0;
+  let years = toYear - fromYear;
+  if (toMonth < fromMonth || (toMonth === fromMonth && toDay < fromDay)) years -= 1;
+  return years;
+}
+
 function historyConfidence(metric: MetricSeries, evaluationDate: string): Confidence {
   if (metric.source.toUpperCase().includes("MANUAL")) return "LOW";
   const history = availableHistory(metric, evaluationDate);
   if (history.length === 0) return "LOW";
   const earliest = history.reduce((min, point) => (point.asOf < min ? point.asOf : min), history[0].asOf);
-  const years = (Date.parse(evaluationDate) - Date.parse(earliest)) / (365.25 * 24 * 60 * 60 * 1000);
-  return years < DEFAULT_SCORING_CONFIG.history.minimumYearsForMediumConfidence ? "LOW" : "HIGH";
+  const years = fullYearsBetween(earliest, evaluationDate);
+  if (years < DEFAULT_SCORING_CONFIG.history.minimumYearsForMediumConfidence) return "LOW";
+  const containsPartial = metric.quality === "PARTIAL" || history.some((point) => point.quality === "PARTIAL");
+  if (containsPartial || metric.source.toUpperCase().includes("DERIVED")) return "MEDIUM";
+  return years >= DEFAULT_SCORING_CONFIG.history.preferredYears ? "HIGH" : "MEDIUM";
 }
 
 export function scoreHistoricalMetric(
@@ -58,6 +76,8 @@ export function scoreHistoricalMetric(
       source: metric.source,
       asOf: metric.asOf,
       confidence: "LOW",
+      quality: metric.quality,
+      coverage: metric.coverage,
     };
   }
 
@@ -71,5 +91,7 @@ export function scoreHistoricalMetric(
     source: metric.source,
     asOf: metric.asOf,
     confidence: historyConfidence(metric, evaluationDate),
+    quality: metric.quality,
+    coverage: metric.coverage,
   };
 }

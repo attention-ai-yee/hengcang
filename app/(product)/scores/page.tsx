@@ -25,9 +25,9 @@ export default async function ScoresPage() {
       </Card>
       <Card className="mb-5 p-5">
         <h2 className="text-lg font-semibold">评分如何计算</h2>
-        <div className="mt-4 grid gap-3 text-sm leading-6 md:grid-cols-3">
-          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>1. 指标归一化</strong><p className="mt-1 text-[#66736d]">只使用当时已经发布的数据计算滚动历史百分位。便宜程度、基本面和趋势均为越高越有吸引力。</p></div>
-          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>2. 合成三项分</strong><p className="mt-1 text-[#66736d]">按资产桶权重加权；缺失项自动重新归一化，可用权重低于 60% 或历史不足 3 年时降为低可信度。</p></div>
+          <div className="mt-4 grid gap-3 text-sm leading-6 md:grid-cols-3">
+            <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>1. 指标归一化</strong><p className="mt-1 text-[#66736d]">只使用当时已经发布的数据计算滚动历史百分位。便宜程度、基本面和趋势均为越高越有吸引力。</p></div>
+          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>2. 合成三项分</strong><p className="mt-1 text-[#66736d]">按资产桶权重加权；覆盖率低于 60% 为低可信度，60%–80% 为中等。代理数据最高只到中等可信度。</p></div>
           <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>3. 计算配置吸引力分</strong><p className="mt-1 text-[#66736d]">50% × 便宜程度 + 30% × 基本面 + 20% × 趋势。高分表示配置吸引力更强，不代表保证上涨。</p></div>
         </div>
         <ScoreColorLegend />
@@ -83,8 +83,8 @@ export default async function ScoresPage() {
                 {details.note && <p className="mt-3 leading-6 text-[#66736d]">{details.note}</p>}
                 <div className="mt-3 overflow-x-auto">
                   <table className="data-table min-w-[560px]">
-                    <thead><tr><th>指标</th><th>原始值</th><th>历史分位</th><th>得分</th><th>权重</th><th>来源 / 日期</th></tr></thead>
-                    <tbody>{details.components.map((component) => <tr key={component.key}><td>{component.key}</td><td>{showValue(component.rawValue)}</td><td>{showValue(component.percentile, "%")}</td><td>{showValue(component.score)}</td><td>{(component.weight * 100).toFixed(0)}%</td><td>{component.source} · {component.asOf}</td></tr>)}</tbody>
+                    <thead><tr><th>指标</th><th>原始值</th><th>历史分位</th><th>得分</th><th>权重</th><th>来源 / 质量</th><th>日期 / 覆盖</th></tr></thead>
+                    <tbody>{details.components.map((component) => <tr key={component.key}><td>{component.key}</td><td>{showValue(component.rawValue)}</td><td>{showValue(component.percentile, "%")}</td><td>{showValue(component.score)}</td><td>{(component.weight * 100).toFixed(0)}%</td><td>{providerLabel(component.source)} · <Quality quality={component.quality} /></td><td>{component.asOf}{component.coverage === null ? "" : ` · ${(component.coverage * 100).toFixed(0)}%`}</td></tr>)}</tbody>
                   </table>
                 </div>
                 {details.reasons.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-[#72572e]">{details.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
@@ -113,6 +113,8 @@ interface DetailComponent {
   weight: number;
   source: string;
   asOf: string;
+  quality: "VALID" | "PARTIAL" | null;
+  coverage: number | null;
 }
 
 function parseDetails(json: string): { note: string; components: DetailComponent[]; reasons: string[] } {
@@ -131,6 +133,8 @@ function parseDetails(json: string): { note: string; components: DetailComponent
         weight: typeof component.weight === "number" ? component.weight : 0,
         source: typeof component.source === "string" ? component.source : "未知",
         asOf: typeof component.asOf === "string" ? component.asOf : "未知",
+        quality: component.quality === "VALID" || component.quality === "PARTIAL" ? component.quality : null,
+        coverage: typeof component.coverage === "number" ? component.coverage : null,
       })),
       reasons: Array.isArray(value.reasons) ? value.reasons.filter((item): item is string => typeof item === "string") : [],
     };
@@ -141,4 +145,17 @@ function parseDetails(json: string): { note: string; components: DetailComponent
 
 function showValue(value: number | null, suffix = "") {
   return value === null ? "—" : `${value}${suffix}`;
+}
+
+function Quality({ quality }: { quality: DetailComponent["quality"] }) {
+  if (quality === "VALID") return <span className="text-[#18754b]">有效</span>;
+  if (quality === "PARTIAL") return <span className="text-[#a66b10]">代理 / 部分</span>;
+  return <span className="text-[#748078]">未标记</span>;
+}
+
+function providerLabel(source: string) {
+  if (source === "tushare-derived-forward-pe") return "TTM PE 代理";
+  if (source === "tushare-gold-etf-proxy") return "国内黄金 ETF 流量代理";
+  if (source === "tushare-index-aggregate") return "Tushare 成分股聚合";
+  return source;
 }

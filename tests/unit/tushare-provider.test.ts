@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TushareProvider } from "@/providers/tushare";
+import { FredProvider } from "@/providers/fred";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -56,16 +57,24 @@ describe("Tushare canonical adapter", () => {
     ]);
   });
 
-  it("10 年实际利率映射为黄金统一宏观指标", async () => {
-    mockTushare({ fields: ["date", "y10"], items: [["20260821", 1.75]] });
+  it("不再把 Tushare us_trycr 伪标为实际利率", async () => {
     const provider = new TushareProvider("test-token");
     const result = await provider.getMacroSeries({
       seriesId: "REAL_YIELD_10Y",
       range: { start: "2026-08-01", end: "2026-08-21" },
     });
 
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("NOT_SUPPORTED");
+  });
+
+  it("FRED 映射 DFII10 与 DTWEXBGS 到统一宏观指标", async () => {
+    const { requests } = mockTushare({ fields: [], items: [] });
+    const provider = new FredProvider("fred-test-key");
+    const result = await provider.getMacroSeries({ seriesId: "DOLLAR_INDEX", range: { start: "2026-08-01", end: "2026-08-21" } });
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data[0]).toMatchObject({ key: "REAL_YIELD_10Y", value: "1.75", asOf: "2026-08-21" });
+    const url = new URL(String(requests[0]?.input));
+    expect(url.searchParams.get("series_id")).toBe("DTWEXBGS");
   });
 });

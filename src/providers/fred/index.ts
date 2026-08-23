@@ -14,6 +14,11 @@ interface FredResponse {
   observations?: Array<{ date: string; value: string; realtime_start: string }>;
 }
 
+export const FRED_SERIES_MAP = {
+  REAL_YIELD_10Y: "DFII10",
+  DOLLAR_INDEX: "DTWEXBGS",
+} as const;
+
 export class FredProvider implements MarketDataProvider {
   readonly id = "fred";
 
@@ -26,7 +31,9 @@ export class FredProvider implements MarketDataProvider {
   async getMacroSeries(request: MacroRequest): Promise<ProviderResult<MetricPoint[]>> {
     if (!this.apiKey) return providerFailure(this.id, "NOT_CONFIGURED", "缺少 FRED_API_KEY");
     const url = new URL("https://api.stlouisfed.org/fred/series/observations");
-    url.searchParams.set("series_id", request.seriesId);
+    const seriesId = FRED_SERIES_MAP[request.seriesId as keyof typeof FRED_SERIES_MAP];
+    if (!seriesId) return providerFailure(this.id, "NOT_SUPPORTED", `未映射 FRED 宏观序列 ${request.seriesId}`);
+    url.searchParams.set("series_id", seriesId);
     url.searchParams.set("api_key", this.apiKey);
     url.searchParams.set("file_type", "json");
     url.searchParams.set("observation_start", request.range.start);
@@ -38,7 +45,7 @@ export class FredProvider implements MarketDataProvider {
         .map((observation): MetricPoint => ({
           key: request.seriesId,
           value: observation.value,
-          unit: "provider_defined",
+          unit: request.seriesId === "REAL_YIELD_10Y" ? "percent" : "index",
           observedAt: `${observation.date}T00:00:00Z`,
           availableAt: `${observation.realtime_start}T00:00:00Z`,
           asOf: observation.date,

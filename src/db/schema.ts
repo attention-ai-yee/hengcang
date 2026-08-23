@@ -124,6 +124,7 @@ export const metricObservations = sqliteTable(
     asOf: text("as_of").notNull(),
     fetchedAt: text("fetched_at").notNull(),
     quality: text("quality").notNull().default("VALID"),
+    metadataJson: text("metadata_json"),
     isManualOverride: integer("is_manual_override", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [
@@ -133,7 +134,25 @@ export const metricObservations = sqliteTable(
       table.metricKey,
       table.provider,
       table.observedAt,
+      table.availableAt,
     ),
+  ],
+);
+
+export const indexConstituentSnapshots = sqliteTable(
+  "index_constituent_snapshots",
+  {
+    id: text("id").primaryKey(),
+    indexSymbol: text("index_symbol").notNull(),
+    effectiveDate: text("effective_date").notNull(),
+    constituentSymbol: text("constituent_symbol").notNull(),
+    weight: real("weight").notNull(),
+    provider: text("provider").notNull(),
+    fetchedAt: text("fetched_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("index_constituent_snapshot_unique").on(table.indexSymbol, table.effectiveDate, table.constituentSymbol),
+    index("index_constituent_snapshot_lookup_idx").on(table.indexSymbol, table.effectiveDate),
   ],
 );
 

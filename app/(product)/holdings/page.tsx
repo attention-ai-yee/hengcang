@@ -11,6 +11,7 @@ export default async function HoldingsPage() {
   const view = await getPortfolioView();
   const investableValues = new Map(view.holdings.map((holding) => [holding.id, BigInt(holding.marketValueMinor)]));
   let remainingReserved = BigInt(view.summary.reservedCashMinor);
+  const risks = new Map(view.holdingRisks.map((risk) => [risk.id, risk]));
   const reserveOrder = [...view.holdings]
     .filter((holding) => holding.assetBucket === "CASH_BONDS")
     .sort((first, second) => Number(second.instrumentType === "CASH") - Number(first.instrumentType === "CASH"));
@@ -25,7 +26,7 @@ export default async function HoldingsPage() {
       <PageIntro
         eyebrow="Holdings & risk"
         title="持仓与风险"
-        description="集中度按总资产计算；未拆分的账户汇总不会被视为已经分散。"
+        description="集中度按可投资资产计算（已扣除预留资金）；未拆分的账户汇总不会被视为已经分散。"
         action={<Link href="/onboarding" className="rounded-xl bg-[#173f32] px-4 py-2.5 text-sm font-semibold text-white">新增持仓</Link>}
       />
       {!view.summary.concentrationComplete && (
@@ -42,6 +43,7 @@ export default async function HoldingsPage() {
               const investableValue = investableValues.get(holding.id) ?? value;
               const denominator = BigInt(view.summary.investableAssetsMinor);
               const bps = denominator > 0n ? Number((investableValue * 10_000n) / denominator) : 0;
+              const risk = risks.get(holding.id);
               return (
                 <tr key={holding.id}>
                   <td><strong>{holding.name}</strong><span className="mt-1 block text-xs text-[#78847e]">{holding.symbol ?? "无代码"}</span></td>
@@ -49,7 +51,7 @@ export default async function HoldingsPage() {
                   <td>{formatMoneyMinor(value)}</td>
                   <td>{formatBps(bps)}</td>
                   <td>{instrumentTypeLabel(holding.instrumentType)}</td>
-                  <td className="space-x-1">{holding.isApproximate && <StatusPill tone="warn">约数</StatusPill>}{holding.needsBreakdown && <StatusPill tone="danger">待拆分</StatusPill>}{!holding.isApproximate && !holding.needsBreakdown && <StatusPill tone="good">已确认</StatusPill>}</td>
+                  <td className="space-x-1">{risk?.isOverweight && <StatusPill tone="danger">超配（单股/ETF 上限 {formatBps(risk.applicableLimitBps ?? 0)}）</StatusPill>}{risk && !risk.isOverweight && !risk.canAdd && <StatusPill tone="warn">已达上限</StatusPill>}{holding.isApproximate && <StatusPill tone="warn">约数</StatusPill>}{holding.needsBreakdown && <StatusPill tone="danger">待拆分</StatusPill>}{!holding.isApproximate && !holding.needsBreakdown && <StatusPill tone="good">已确认</StatusPill>}</td>
                   <td>{holding.asOf}</td>
                 </tr>
               );

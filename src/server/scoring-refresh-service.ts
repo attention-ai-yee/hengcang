@@ -13,13 +13,52 @@ import type { ManualObservationInput } from "@/metrics/manual-import";
 import { SqliteMetricSeriesRepository } from "@/metrics/observation-repository";
 import { getPortfolioView } from "./portfolio-service";
 
-function previousCandidate(componentsJson: string, fallback: string): RecommendationState {
-  try {
-    const parsed = JSON.parse(componentsJson) as { candidateState?: unknown };
-    return typeof parsed.candidateState === "string" ? parsed.candidateState as RecommendationState : fallback as RecommendationState;
-  } catch {
-    return fallback as RecommendationState;
+export interface CandidateChain {
+  /** 最近一条先于 asOf 的快照的已确认状态；没有任何先前快照时为 undefined */
+  previousState?: RecommendationState;
+  states: RecommendationState[];
+  dates: string[];
+}
+
+/**
+ * 读取用于 3 日确认的候选链：只接受 componentsJson 里显式写有 candidateState
+ * 的快照（自动刷新路径），手工代理评分等未参与候选链的快照不混入，
+ * 避免把"已确认状态"当"候选状态"计数。limit 从配置推导而非硬编码。
+ */
+export async function loadCandidateChain(
+  bucket: ScorableAssetBucket,
+  asOf: string,
+): Promise<CandidateChain> {
+  const db = getDatabase();
+  const window = Math.max(1, DEFAULT_SCORING_CONFIG.signalRules.confirmationTradingDays - 1);
+  const prior = db
+    .select()
+    .from(scoreSnapshots)
+    .where(
+      and(
+        eq(scoreSnapshots.portfolioId, DEFAULT_PORTFOLIO_ID),
+        eq(scoreSnapshots.assetBucket, bucket),
+        lt(scoreSnapshots.asOf, asOf),
+      ),
+    )
+    .orderBy(desc(scoreSnapshots.asOf))
+    .limit(window)
+    .all();
+  const chain: CandidateChain = { states: [], dates: [] };
+  for (const snapshot of prior) {
+    let candidateState: unknown;
+    try {
+      candidateState = (JSON.parse(snapshot.componentsJson) as { candidateState?: unknown }).candidateState;
+    } catch {
+      candidateState = undefined;
+    }
+    if (typeof candidateState !== "string") continue;
+    chain.states.unshift(candidateState as RecommendationState);
+    chain.dates.unshift(snapshot.asOf);
   }
+  const latestPrior = prior[0];
+  if (latestPrior) chain.previousState = latestPrior.recommendationState as RecommendationState;
+  return chain;
 }
 
 function riskSeverity(result: ScoreResult) {
@@ -46,22 +85,24 @@ export async function refreshScoresForBuckets(
   const portfolio = await getPortfolioView();
   const targets = new Map(portfolio.targets.map((target) => [target.assetBucket, target]));
   const builder = new ScoreInputBuilder(new SqliteMetricSeriesRepository({
-    fallbackProviders: ["tushare", "tushare-derived", "fred", "twelve-data", "manual"],
+    primaryProviderByMetric: {
+      REAL_YIELD_10Y: "fred",
+      DOLLAR_INDEX: "fred",
+      PS: "tushare-index-aggregate",
+      DIVIDEND_YIELD: "tushare-index-aggregate",
+      ROE: "tushare-index-aggregate",
+      EARNINGS_GROWTH: "tushare-index-aggregate",
+      REVENUE_GROWTH: "tushare-index-aggregate",
+      INDEX_EARNINGS_GROWTH: "tushare-index-aggregate",
+      DIVIDEND_STABILITY_SCORE: "tushare-index-aggregate",
+      GOLD_ETF_FLOW_3M: "tushare-gold-etf-proxy",
+    },
+    fallbackProviders: ["tushare", "tushare-index-aggregate", "tushare-derived-forward-pe", "tushare-derived", "fred", "twelve-data", "manual"],
   }));
   const results: Array<{ bucket: ScorableAssetBucket; asOf: string; saved: boolean; result: ScoreResult }> = [];
 
   for (const request of requests) {
-    const prior = db
-      .select()
-      .from(scoreSnapshots)
-      .where(and(
-        eq(scoreSnapshots.portfolioId, DEFAULT_PORTFOLIO_ID),
-        eq(scoreSnapshots.assetBucket, request.bucket),
-        lt(scoreSnapshots.asOf, request.asOf),
-      ))
-      .orderBy(desc(scoreSnapshots.asOf))
-      .limit(2)
-      .all();
+    const chain = await loadCandidateChain(request.bucket, request.asOf);
     const latestDecision = db
       .select()
       .from(decisionLogs)
@@ -78,10 +119,9 @@ export async function refreshScoresForBuckets(
     const result = calculateAssetScore(input, {
       currentWeightBps: portfolio.summary.byBucket[request.bucket].weightBps,
       positionLimitBps: target?.maxBps,
-      previousState: prior[0]?.recommendationState as RecommendationState | undefined,
-      candidateHistory: prior
-        .map((snapshot) => previousCandidate(snapshot.componentsJson, snapshot.recommendationState))
-        .reverse(),
+      previousState: chain.previousState,
+      candidateHistory: chain.states,
+      candidateHistoryDates: chain.dates,
       lastDecisionDirection: latestDecision?.direction === "ADD" || latestDecision?.direction === "REDUCE"
         ? latestDecision.direction
         : undefined,

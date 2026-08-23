@@ -1,14 +1,21 @@
 import { getDatabase } from "@/db/client";
 import { DEFAULT_PORTFOLIO_ID } from "@/db/queries";
 import { scoreSnapshots } from "@/db/schema";
-import { applyRiskRules, calculateOpportunityScore } from "@/domain/scoring";
+import { applyRiskRules, calculateOpportunityScore, DEFAULT_SCORING_CONFIG } from "@/domain/scoring";
+import { confirmStateTransition } from "@/domain/scoring/state";
 import type { AssetBucket } from "@/domain/types";
 import { getPortfolioView } from "@/server/portfolio-service";
 import type { z } from "zod";
 import type { manualScorePayloadSchema } from "@/lib/validation";
+import { loadCandidateChain } from "./scoring-refresh-service";
 
 export type ManualScorePayload = z.infer<typeof manualScorePayloadSchema>;
 
+/**
+ * 手工代理评分（低可信度兜底）。与自动刷新共用同一条 3 日确认候选链：
+ * 快照里显式写入 candidateState，后续自动刷新的 loadCandidateChain
+ * 能正确识别它，而不会把"已确认状态"误当"候选状态"计数。
+ */
 export async function saveManualScore(payload: ManualScorePayload) {
   const view = await getPortfolioView();
   const target = view.targets.find((item) => item.assetBucket === payload.assetBucket);
@@ -27,6 +34,19 @@ export async function saveManualScore(payload: ManualScorePayload) {
     currentWeightBps: actualBps,
     positionLimitBps: target?.maxBps,
   });
+
+  const chain = await loadCandidateChain(payload.assetBucket, payload.asOf);
+  const confirmation = chain.previousState
+    ? confirmStateTransition({
+        previousState: chain.previousState,
+        candidateState: rules.state,
+        candidateHistory: chain.states,
+        candidateHistoryDates: chain.dates,
+        immediate: rules.immediate,
+        confirmationTradingDays: DEFAULT_SCORING_CONFIG.signalRules.confirmationTradingDays,
+      })
+    : { state: rules.state, confirmed: true };
+
   const now = new Date().toISOString();
   const record = {
     id: crypto.randomUUID(),
@@ -40,20 +60,25 @@ export async function saveManualScore(payload: ManualScorePayload) {
     opportunityScore,
     riskPenalty: 0,
     confidence,
-    recommendationState: rules.state,
-    allowAdd: rules.allowAdd,
+    recommendationState: confirmation.state,
+    allowAdd: rules.allowAdd && confirmation.confirmed,
     forceSell: false,
     riskSeverity: isOverweight ? "WARNING" : "INFO",
     componentsJson: JSON.stringify({
       source: "MANUAL_AGGREGATE_PROXY",
       modelVersion: 1,
       note: "用户手工录入的已归一化代理分，未使用原始指标历史序列",
+      candidateState: rules.state,
+      stateConfirmed: confirmation.confirmed,
       components: {
         cheapness: { rawValue: payload.cheapnessScore, percentile: null, score: payload.cheapnessScore, weight: 0.5, source: "MANUAL", asOf: payload.asOf },
         fundamental: { rawValue: payload.fundamentalScore, percentile: null, score: payload.fundamentalScore, weight: 0.3, source: "MANUAL", asOf: payload.asOf },
         trend: { rawValue: payload.trendScore, percentile: null, score: payload.trendScore, weight: 0.2, source: "MANUAL", asOf: payload.asOf },
       },
-      reasons: rules.reasons,
+      reasons: [
+        ...rules.reasons,
+        ...(confirmation.confirmed ? [] : ["候选状态尚未连续三个交易日确认"]),
+      ],
     }),
     createdAt: now,
   };

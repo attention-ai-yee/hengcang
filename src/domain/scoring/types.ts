@@ -5,6 +5,7 @@ export interface HistoricalObservation {
   value: number;
   asOf: string;
   availableAt: string;
+  quality?: "VALID" | "PARTIAL";
 }
 
 export interface MetricSeries {
@@ -13,6 +14,8 @@ export interface MetricSeries {
   source: string;
   asOf: string;
   availableAt?: string;
+  quality?: "VALID" | "PARTIAL";
+  coverage?: number;
 }
 
 export interface DirectScoreMetric {
@@ -20,6 +23,8 @@ export interface DirectScoreMetric {
   source: string;
   asOf: string;
   confidence?: Confidence;
+  quality?: "VALID" | "PARTIAL";
+  coverage?: number;
 }
 
 export interface PointMetric {
@@ -27,6 +32,8 @@ export interface PointMetric {
   source: string;
   asOf: string;
   confidence?: Confidence;
+  quality?: "VALID" | "PARTIAL";
+  coverage?: number;
 }
 
 export interface ScoreComponentResult {
@@ -37,6 +44,8 @@ export interface ScoreComponentResult {
   source: string;
   asOf: string;
   confidence: Confidence;
+  quality?: "VALID" | "PARTIAL";
+  coverage?: number;
 }
 
 export interface SubscoreResult {
@@ -110,6 +119,8 @@ export interface ScoreRiskContext {
   confidenceOverride?: Confidence;
   previousState?: RecommendationState;
   candidateHistory?: RecommendationState[];
+  /** 与 candidateHistory 一一对应的快照日期（YYYY-MM-DD），用于按不同交易日计数确认 */
+  candidateHistoryDates?: string[];
   lastDecisionDirection?: Exclude<RecommendationDirection, "NONE">;
   lastDecisionAt?: string;
 }

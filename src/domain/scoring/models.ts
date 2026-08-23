@@ -24,6 +24,8 @@ function directComponent(metric: DirectScoreMetric, weight: number): ScoreCompon
     source: metric.source,
     asOf: metric.asOf,
     confidence: metric.confidence ?? (metric.source.toUpperCase().includes("MANUAL") ? "LOW" : "HIGH"),
+    quality: metric.quality,
+    coverage: metric.coverage,
   };
 }
 
@@ -35,7 +37,10 @@ function worstConfidence(values: Confidence[]): Confidence {
 
 export function combineComponents(
   components: Record<string, ScoreComponentResult>,
-  lowConfidenceCoverage = DEFAULT_SCORING_CONFIG.history.lowConfidenceCoverage,
+  confidenceThresholds = {
+    mediumCoverage: DEFAULT_SCORING_CONFIG.history.mediumCoverage,
+    highCoverage: DEFAULT_SCORING_CONFIG.history.highCoverage,
+  },
 ): SubscoreResult {
   const entries = Object.entries(components);
   const totalWeight = entries.reduce((sum, [, component]) => sum + component.weight, 0);
@@ -53,12 +58,15 @@ export function combineComponents(
       availableWeight,
   );
   const sourceConfidence = worstConfidence(available.map(([, component]) => component.confidence));
-  const confidence =
-    coverage < lowConfidenceCoverage
+  // 覆盖率档位只用于“降级”，不得抬高来源置信度：手工/代理来源的 LOW
+  // 不能因为覆盖率达标而被覆盖成 MEDIUM/HIGH（Code Review M10/L5 同源问题）。
+  const coverageTier: Confidence =
+    coverage < confidenceThresholds.mediumCoverage
       ? "LOW"
-      : coverage < 1 && sourceConfidence === "HIGH"
+      : coverage <= confidenceThresholds.highCoverage
         ? "MEDIUM"
-        : sourceConfidence;
+        : "HIGH";
+  const confidence = worstConfidence([coverageTier, sourceConfidence]);
 
   return { score, coverage: round1(coverage * 100) / 100, confidence, components, missingMetrics };
 }
@@ -87,6 +95,8 @@ export function calculateTrend(input: TrendModelInput, asOf: string): SubscoreRe
       source: priceSource,
       asOf,
       confidence: priceConfidence,
+      quality: input.price.quality,
+      coverage: input.price.coverage,
     },
     maAlignment: {
       rawValue: alignmentScore,
@@ -96,6 +106,8 @@ export function calculateTrend(input: TrendModelInput, asOf: string): SubscoreRe
       source: input.ma60.source,
       asOf,
       confidence: input.ma60.confidence ?? (input.ma60.source.toUpperCase().includes("MANUAL") ? "LOW" : "HIGH"),
+      quality: input.ma60.quality,
+      coverage: input.ma60.coverage,
     },
     momentum6m: scoreHistoricalMetric(input.momentum6m, weights.momentum6m, "HIGHER_IS_BETTER", asOf),
   });
@@ -126,7 +138,7 @@ function calculateTechGrowth(input: TechGrowthInput) {
   const weights = DEFAULT_SCORING_CONFIG.componentWeights.TECH_GROWTH;
   const forwardPe = scoreHistoricalMetric(input.forwardPe, weights.cheapness.forwardPe, "LOWER_IS_BETTER", input.asOf);
   let growthAdjusted: ScoreComponentResult;
-  if ((input.expectedEarningsGrowth.currentValue ?? 0) <= 0) {
+  if (input.expectedEarningsGrowth.currentValue !== null && input.expectedEarningsGrowth.currentValue <= 0) {
     growthAdjusted = {
       rawValue: input.expectedEarningsGrowth.currentValue,
       percentile: null,
@@ -135,6 +147,8 @@ function calculateTechGrowth(input: TechGrowthInput) {
       source: input.expectedEarningsGrowth.source,
       asOf: input.asOf,
       confidence: forwardPe.confidence,
+      quality: forwardPe.quality,
+      coverage: forwardPe.coverage,
     };
   } else if (input.peg) {
     growthAdjusted = scoreHistoricalMetric(input.peg, weights.cheapness.growthAdjustedValuation, "LOWER_IS_BETTER", input.asOf);
@@ -147,6 +161,8 @@ function calculateTechGrowth(input: TechGrowthInput) {
       source: input.forwardPe.source,
       asOf: input.asOf,
       confidence: "LOW",
+      quality: input.forwardPe.quality,
+      coverage: input.forwardPe.coverage,
     };
   }
   const cheapness = combineComponents({

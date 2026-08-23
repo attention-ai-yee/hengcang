@@ -41,7 +41,7 @@ export function applyRiskRules(input: {
   const fundamentalCoverage = input.fundamentalCoverage ?? 1;
   if (
     input.fundamentalScore !== null &&
-    fundamentalCoverage >= config.history.lowConfidenceCoverage &&
+    fundamentalCoverage >= config.history.mediumCoverage &&
     input.fundamentalScore < config.thresholds.fundamentalCircuitBreaker
   ) {
     reasons.push(`基本面分低于 ${config.thresholds.fundamentalCircuitBreaker}，暂停新增并重新评估投资逻辑`);
@@ -60,7 +60,12 @@ export function applyRiskRules(input: {
     return { state: "LOW_CONFIDENCE", allowAdd: false, forceSell: false, reasons, immediate: true };
   }
 
-  const state = getBaseState(input.opportunityScore, config);
+  let state = getBaseState(input.opportunityScore, config);
+  if (input.confidence === "MEDIUM") {
+    if (state === "STRONG_ADD_ALLOWED") state = "LIGHT_ADD_ALLOWED";
+    if (state === "REDUCE_CONSIDER") state = "DO_NOT_ADD";
+    reasons.push("数据可信度为中等：不输出强增配或降低仓位状态");
+  }
   return {
     state,
     allowAdd: state === "STRONG_ADD_ALLOWED" || state === "LIGHT_ADD_ALLOWED",
@@ -106,15 +111,35 @@ export function calculateAssetScore(
     positionLimitBps: risk.positionLimitBps,
     config,
   });
+
+  /**
+   * 支柱级完整性闸门：重权只允许发生在指标级。整根支柱（便宜程度/基本面/趋势）
+   * 缺失时，机会分被静默重加权且置信度可能仍是 HIGH——此时禁止输出任何增配状态，
+   * 按 LOW_CONFIDENCE 处理（基本面熔断与超配两类更严重的即时态保持优先）。
+   */
+  const pillarMissing =
+    subscores.cheapness.score === null || subscores.fundamental.score === null || subscores.trend.score === null;
+  const gated =
+    pillarMissing && rules.state !== "REASSESS_THESIS" && rules.state !== "OVERWEIGHT"
+      ? {
+          state: "LOW_CONFIDENCE" as RecommendationState,
+          allowAdd: false,
+          forceSell: false as const,
+          reasons: [...rules.reasons, "缺少整根评分支柱（便宜程度/基本面/趋势之一），禁止输出增配状态"],
+          immediate: true,
+        }
+      : rules;
+
   const confirmation = risk.previousState
     ? confirmStateTransition({
         previousState: risk.previousState,
-        candidateState: rules.state,
+        candidateState: gated.state,
         candidateHistory: risk.candidateHistory ?? [],
-        immediate: rules.immediate,
+        candidateHistoryDates: risk.candidateHistoryDates,
+        immediate: gated.immediate,
         confirmationTradingDays: config.signalRules.confirmationTradingDays,
       })
-    : { state: rules.state, confirmed: true };
+    : { state: gated.state, confirmed: true };
   const signalSuppressed = Boolean(
     risk.lastDecisionDirection &&
       risk.lastDecisionAt &&
@@ -138,12 +163,12 @@ export function calculateAssetScore(
     fundamentalScore: subscores.fundamental.score,
     trendScore: subscores.trend.score,
     opportunityScore: opportunity.score,
-    confidence,
-    candidateState: rules.state,
+    confidence: pillarMissing ? worseConfidence(confidence, "MEDIUM") : confidence,
+    candidateState: gated.state,
     state: confirmation.state,
     stateConfirmed: confirmation.confirmed,
     signalSuppressed,
-    allowAdd: rules.allowAdd && confirmation.confirmed && !signalSuppressed,
+    allowAdd: gated.allowAdd && confirmation.confirmed && !signalSuppressed,
     forceSell: false,
     components,
     missingMetrics: [
@@ -152,7 +177,7 @@ export function calculateAssetScore(
       ...subscores.trend.missingMetrics.map((key) => `trend.${key}`),
     ],
     reasons: [
-      ...rules.reasons,
+      ...gated.reasons,
       ...(!confirmation.confirmed ? ["候选状态尚未连续三个交易日确认"] : []),
       ...(signalSuppressed ? ["七天冷却期内，同方向建议已抑制"] : []),
     ],

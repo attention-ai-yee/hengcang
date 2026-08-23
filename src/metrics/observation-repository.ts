@@ -22,8 +22,8 @@ export interface ProviderSelectionPolicy {
 }
 
 export interface ProviderMetricObservationInput {
-  subjectType: "ASSET_BUCKET";
-  subjectId: ScorableAssetBucket;
+  subjectType: "ASSET_BUCKET" | "INSTRUMENT";
+  subjectId: ScorableAssetBucket | string;
   metricKey: CanonicalMetricKey;
   value: string;
   unit: string;
@@ -33,6 +33,7 @@ export interface ProviderMetricObservationInput {
   asOf: string;
   fetchedAt: string;
   quality: "VALID" | "PARTIAL";
+  metadataJson?: string;
 }
 
 export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
@@ -56,13 +57,7 @@ export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
     const selected = new Map<string, (typeof rows)[number]>();
     for (const row of rows) {
       const existing = selected.get(row.asOf);
-      if (!existing || this.rank(row, request.metricKey) > this.rank(existing, request.metricKey)) {
-        selected.set(row.asOf, row);
-      } else if (
-        existing &&
-        this.rank(row, request.metricKey) === this.rank(existing, request.metricKey) &&
-        row.fetchedAt > existing.fetchedAt
-      ) {
+      if (!existing || this.isPreferred(row, existing, request.metricKey, request.asOf)) {
         selected.set(row.asOf, row);
       }
     }
@@ -72,12 +67,33 @@ export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
     return {
       currentValue: latest ? Number(latest.value) : null,
       history: historyRows
-        .map((row) => ({ value: Number(row.value), asOf: row.asOf, availableAt: row.availableAt }))
+        .map((row) => ({ value: Number(row.value), asOf: row.asOf, availableAt: row.availableAt, quality: row.quality as "VALID" | "PARTIAL" }))
         .filter((point) => Number.isFinite(point.value)),
       source: latest?.provider ?? "UNAVAILABLE",
       asOf: latest?.asOf ?? request.asOf,
       availableAt: latest?.availableAt,
+      quality: latest?.quality as "VALID" | "PARTIAL" | undefined,
+      coverage: latest ? parseCoverage(latest.metadataJson) : undefined,
     };
+  }
+
+  private isPreferred(
+    candidate: typeof metricObservations.$inferSelect,
+    existing: typeof metricObservations.$inferSelect,
+    metricKey: CanonicalMetricKey,
+    evaluationDate: string,
+  ): boolean {
+    const candidateRank = this.rank(candidate, metricKey);
+    const existingRank = this.rank(existing, metricKey);
+    if (candidate.provider === existing.provider) {
+      // Revisions share an observed/as-of date. At a past evaluation date only
+      // the most recently available revision may be used, never a later restatement.
+      if (candidate.availableAt !== existing.availableAt) return candidate.availableAt > existing.availableAt;
+      return candidate.fetchedAt > existing.fetchedAt;
+    }
+    if (candidateRank !== existingRank) return candidateRank > existingRank;
+    if (candidate.quality !== existing.quality) return candidate.quality === "VALID";
+    return candidate.fetchedAt > existing.fetchedAt;
   }
 
   private rank(row: typeof metricObservations.$inferSelect, metricKey: CanonicalMetricKey): number {
@@ -119,6 +135,7 @@ export function commitManualObservations(rows: ManualObservationInput[]) {
         asOf: row.asOf,
         fetchedAt,
         quality: "VALID",
+        metadataJson: null,
         isManualOverride: true,
       } as const;
       if (existing) {
@@ -165,6 +182,7 @@ export function commitProviderMetricObservations(rows: ProviderMetricObservation
           eq(metricObservations.metricKey, row.metricKey),
           eq(metricObservations.provider, row.provider),
           eq(metricObservations.observedAt, row.observedAt),
+          eq(metricObservations.availableAt, row.availableAt),
         ))
         .get();
       const values = { ...row, isManualOverride: false } as const;
@@ -179,4 +197,15 @@ export function commitProviderMetricObservations(rows: ProviderMetricObservation
   });
 
   return { inserted, updated, committed: rows.length };
+}
+
+function parseCoverage(metadataJson: string | null): number | undefined {
+  if (!metadataJson) return undefined;
+  try {
+    const parsed = JSON.parse(metadataJson) as { constituentCoverage?: unknown };
+    const value = parsed.constituentCoverage;
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }

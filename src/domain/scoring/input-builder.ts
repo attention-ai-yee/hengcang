@@ -14,6 +14,8 @@ function directScore(series: MetricSeries): DirectScoreMetric {
     source: series.source,
     asOf: series.asOf,
     confidence: series.source === "manual" ? "LOW" : undefined,
+    quality: series.quality,
+    coverage: series.coverage,
   };
 }
 

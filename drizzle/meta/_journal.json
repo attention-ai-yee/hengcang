@@ -15,6 +15,13 @@
       "when": 1787409763754,
       "tag": "0001_jittery_the_order",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787417889272,
+      "tag": "0002_watery_forgotten_one",
+      "breakpoints": true
     }
   ]
 }

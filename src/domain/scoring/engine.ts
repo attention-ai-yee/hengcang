@@ -1,4 +1,4 @@
-import type { Confidence, RecommendationState } from "../types";
+import type { Confidence, RecommendationState, ScorableAssetBucket } from "../types";
 import { DEFAULT_SCORING_CONFIG, assertScoringConfig, type ScoringConfig } from "./config";
 import { combineComponents, calculateModelSubscores } from "./models";
 import { clampScore, round1 } from "./percentile";
@@ -27,6 +27,7 @@ export function calculateOpportunityScore(
 }
 
 export function applyRiskRules(input: {
+  bucket?: ScorableAssetBucket;
   opportunityScore: number | null;
   fundamentalScore: number | null;
   fundamentalCoverage?: number;
@@ -40,6 +41,9 @@ export function applyRiskRules(input: {
 
   const fundamentalCoverage = input.fundamentalCoverage ?? 1;
   if (
+    // 黄金 v1.2：宏观支柱衡量的是环境支持度而非经营基本面，
+    // 不触发「重新评估投资逻辑」（规格 §3）；黄金走独立的宏观逆风闸门（见下方）。
+    input.bucket !== "GOLD" &&
     input.fundamentalScore !== null &&
     fundamentalCoverage >= config.history.mediumCoverage &&
     input.fundamentalScore < config.thresholds.fundamentalCircuitBreaker
@@ -58,6 +62,23 @@ export function applyRiskRules(input: {
   if (input.opportunityScore === null || input.fundamentalScore === null || input.confidence === "LOW") {
     reasons.push("数据可信度不足，禁止输出增配状态");
     return { state: "LOW_CONFIDENCE", allowAdd: false, forceSell: false, reasons, immediate: true };
+  }
+
+  // 黄金宏观逆风闸门（v1.2 规格 §4）：只停止新增，不否定投资逻辑，不立即生效，
+  // 让位于 OVERWEIGHT / LOW_CONFIDENCE（规格 §5）。
+  if (
+    input.bucket === "GOLD" &&
+    fundamentalCoverage >= config.history.mediumCoverage &&
+    input.fundamentalScore !== null &&
+    input.fundamentalScore < config.thresholds.goldMacroHeadwind
+  ) {
+    return {
+      state: "DO_NOT_ADD",
+      allowAdd: false,
+      forceSell: false,
+      immediate: false,
+      reasons: ["黄金宏观支持度偏低，当前实际利率、美元或资金流环境对增配不利；停止新增，继续观察宏观方向。"],
+    };
   }
 
   let state = getBaseState(input.opportunityScore, config);

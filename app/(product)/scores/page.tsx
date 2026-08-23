@@ -31,11 +31,11 @@ export default async function ScoresPage() {
           <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>3. 计算配置吸引力分</strong><p className="mt-1 text-[#66736d]">50% × 便宜程度 + 30% × 基本面 + 20% × 趋势。高分表示配置吸引力更强，不代表保证上涨。</p></div>
         </div>
         <ScoreColorLegend />
-        <p className="mt-3 text-xs leading-5 text-[#748078]">基本面低于 35 时立即暂停新增；超配、基本面恶化和低可信度会覆盖普通分数区间。现金与债券不计算配置吸引力分。</p>
+        <p className="mt-3 text-xs leading-5 text-[#748078]">权益资产基本面低于 35 时立即暂停新增并要求重新评估逻辑；黄金宏观支持度偏低时仅停止新增、继续观察宏观方向。超配与低可信度会覆盖普通分数区间。现金与债券不计算配置吸引力分。</p>
         <details className="mt-4 rounded-xl border border-[#dce3de] p-4 text-sm">
           <summary className="cursor-pointer font-semibold">查看四类资产的默认指标</summary>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <ModelSummary title="黄金" text="便宜程度：5 年价格位置、MA200 偏离、3M 拥挤；基本面：实际利率、美元、ETF 流量、央行购金。" />
+            <ModelSummary title="黄金" text="价格吸引力：5 年价格位置、MA200 偏离、3M 拥挤；宏观支持度：实际利率水平与 3M 变化、美元指数水平与 3M 变化、国内黄金 ETF 资金流代理（15%）、央行购金需求（15%）。宏观支持度低只代表逆风，不代表长期配置逻辑失效。" />
             <ModelSummary title="红利与价值" text="便宜程度：PE 35%、PB 25%、股息率 40%；基本面：盈利增长 40%、ROE 30%、分红稳定性 30%。" />
             <ModelSummary title="科技与成长" text="便宜程度：Forward PE 40%、PS 20%、增长调整估值 40%；基本面：盈利、营收和盈利预期修正。" />
             <ModelSummary title="宽基权益" text="便宜程度：PE、PB、股权风险溢价；基本面：指数盈利增长与盈利预期修正。" />
@@ -55,6 +55,7 @@ export default async function ScoresPage() {
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
           {latestScores.map((score) => {
+            const isGold = score.assetBucket === "GOLD";
             const details = parseDetails(score.componentsJson);
             return <Card key={score.id} className="p-5">
               <div className="flex items-start justify-between">
@@ -67,14 +68,15 @@ export default async function ScoresPage() {
                     trend={score.trendScore}
                     confidence={score.confidence as keyof typeof CONFIDENCE_LABELS}
                     state={score.recommendationState as RecommendationState}
+                    assetBucket={score.assetBucket}
                   />
                 </div>
                 <StatusPill tone={score.confidence === "LOW" ? "warn" : "good"}>{CONFIDENCE_LABELS[score.confidence as keyof typeof CONFIDENCE_LABELS]}</StatusPill>
               </div>
               <div className="mt-5 grid grid-cols-3 gap-3 text-center text-sm">
-                <Metric label="便宜程度" value={score.cheapnessScore} />
-                <Metric label="基本面" value={score.fundamentalScore} />
-                <Metric label="趋势" value={score.trendScore} />
+                <Metric label={isGold ? "价格吸引力" : "便宜程度"} value={score.cheapnessScore} />
+                <Metric label={isGold ? "宏观支持度" : "基本面"} value={score.fundamentalScore} />
+                <Metric label={isGold ? "宏观支持度低 ≠ 投资逻辑失效" : "趋势"} value={score.trendScore} />
               </div>
               <p className="mt-4 text-sm font-semibold">{STATE_LABELS[score.recommendationState as RecommendationState]}</p>
               <p className="mt-1 text-xs text-[#748078]">as_of {score.asOf}</p>
@@ -155,7 +157,7 @@ function Quality({ quality }: { quality: DetailComponent["quality"] }) {
 
 function providerLabel(source: string) {
   if (source === "tushare-derived-forward-pe") return "TTM PE 代理";
-  if (source === "tushare-gold-etf-proxy") return "国内黄金 ETF 流量代理";
+  if (source === "tushare-gold-etf-proxy") return "国内黄金 ETF 资金流代理";
   if (source === "tushare-index-aggregate") return "Tushare 成分股聚合";
   return source;
 }

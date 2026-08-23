@@ -3,7 +3,7 @@ import { DEFAULT_PORTFOLIO_ID } from "@/db/queries";
 import { scoreSnapshots } from "@/db/schema";
 import { applyRiskRules, calculateOpportunityScore, DEFAULT_SCORING_CONFIG } from "@/domain/scoring";
 import { confirmStateTransition } from "@/domain/scoring/state";
-import type { AssetBucket } from "@/domain/types";
+import type { AssetBucket, ScorableAssetBucket } from "@/domain/types";
 import { getPortfolioView } from "@/server/portfolio-service";
 import type { z } from "zod";
 import type { manualScorePayloadSchema } from "@/lib/validation";
@@ -28,6 +28,7 @@ export async function saveManualScore(payload: ManualScorePayload) {
     payload.trendScore,
   );
   const rules = applyRiskRules({
+    bucket: payload.assetBucket as ScorableAssetBucket,
     opportunityScore,
     fundamentalScore: payload.fundamentalScore,
     confidence,

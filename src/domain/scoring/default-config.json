@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "scoreWeights": {
     "cheapness": 0.5,
     "fundamental": 0.3,
@@ -10,7 +10,8 @@
     "lightAdd": 60,
     "hold": 40,
     "doNotAdd": 25,
-    "fundamentalCircuitBreaker": 35
+    "fundamentalCircuitBreaker": 35,
+    "goldMacroHeadwind": 35
   },
   "positionLimits": {
     "singleStock": 0.08,
@@ -32,23 +33,67 @@
   },
   "componentWeights": {
     "VALUE_DIVIDEND": {
-      "cheapness": { "pe": 0.35, "pb": 0.25, "dividendYield": 0.4 },
-      "fundamental": { "earningsGrowth": 0.4, "roe": 0.3, "dividendStability": 0.3 }
+      "cheapness": {
+        "pe": 0.35,
+        "pb": 0.25,
+        "dividendYield": 0.4
+      },
+      "fundamental": {
+        "earningsGrowth": 0.4,
+        "roe": 0.3,
+        "dividendStability": 0.3
+      }
     },
     "TECH_GROWTH": {
-      "cheapness": { "forwardPe": 0.4, "ps": 0.2, "growthAdjustedValuation": 0.4 },
-      "fundamental": { "earningsGrowth": 0.4, "revenueGrowth": 0.3, "earningsRevision": 0.3 },
-      "fundamentalWithoutRevision": { "earningsGrowth": 0.55, "revenueGrowth": 0.45 }
+      "cheapness": {
+        "forwardPe": 0.4,
+        "ps": 0.2,
+        "growthAdjustedValuation": 0.4
+      },
+      "fundamental": {
+        "earningsGrowth": 0.4,
+        "revenueGrowth": 0.3,
+        "earningsRevision": 0.3
+      },
+      "fundamentalWithoutRevision": {
+        "earningsGrowth": 0.55,
+        "revenueGrowth": 0.45
+      }
     },
     "BROAD_EQUITY": {
-      "cheapness": { "pe": 0.4, "pb": 0.3, "equityRiskPremium": 0.3 },
-      "cheapnessWithoutErp": { "pe": 0.6, "pb": 0.4 },
-      "fundamental": { "indexEarningsGrowth": 0.6, "earningsRevision": 0.4 }
+      "cheapness": {
+        "pe": 0.4,
+        "pb": 0.3,
+        "equityRiskPremium": 0.3
+      },
+      "cheapnessWithoutErp": {
+        "pe": 0.6,
+        "pb": 0.4
+      },
+      "fundamental": {
+        "indexEarningsGrowth": 0.6,
+        "earningsRevision": 0.4
+      }
     },
     "GOLD": {
-      "cheapness": { "longTermPricePosition": 0.4, "distanceFromMa200": 0.35, "momentumCrowding": 0.25 },
-      "fundamental": { "realYield": 0.4, "dollar": 0.3, "etfFlow": 0.2, "centralBankDemand": 0.1 }
+      "cheapness": {
+        "longTermPricePosition": 0.4,
+        "distanceFromMa200": 0.35,
+        "momentumCrowding": 0.25
+      },
+      "fundamental": {
+        "realYieldLevel": 0.25,
+        "realYieldChange3m": 0.15,
+        "dollarLevel": 0.2,
+        "dollarChange3m": 0.1,
+        "etfFlow": 0.15,
+        "centralBankDemand": 0.15
+      }
     },
-    "trend": { "ma200": 0.4, "maAlignment": 0.3, "momentum6m": 0.3 }
+    "trend": {
+      "ma200": 0.4,
+      "maAlignment": 0.3,
+      "momentum6m": 0.3
+    }
   }
 }

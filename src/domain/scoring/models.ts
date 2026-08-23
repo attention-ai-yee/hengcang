@@ -1,6 +1,7 @@
 import type { Confidence } from "../types";
 import { DEFAULT_SCORING_CONFIG } from "./config";
 import { clampScore, round1, scoreHistoricalMetric } from "./percentile";
+import { deriveChangeSeries } from "./series-transforms";
 import type {
   AssetModelInput,
   DirectScoreMetric,
@@ -221,9 +222,15 @@ function calculateGold(input: GoldInput) {
     distanceFromMa200: scoreHistoricalMetric(input.distanceFromMa200, weights.cheapness.distanceFromMa200, "LOWER_IS_BETTER", input.asOf),
     momentumCrowding: scoreHistoricalMetric(input.momentum3m, weights.cheapness.momentumCrowding, "LOWER_IS_BETTER", input.asOf),
   });
+  // 黄金 v1.2（docs/hengcang_gold_model_revision_v1_2.md §6/§16）：
+  // 宏观支持度 = 水平项(实际利率 25% + 美元 20%) + 边际变化项(各 15%/10%) + 资金面(ETF 流 15% + 央行购金 15%)。
+  const realYieldChange3m = deriveChangeSeries(input.realYield, 90);
+  const dollarChange3m = deriveChangeSeries(input.dollarIndex, 90);
   const fundamentalComponents: Record<string, ScoreComponentResult> = {
-    realYield: scoreHistoricalMetric(input.realYield, weights.fundamental.realYield, "LOWER_IS_BETTER", input.asOf),
-    dollar: scoreHistoricalMetric(input.dollarIndex, weights.fundamental.dollar, "LOWER_IS_BETTER", input.asOf),
+    realYieldLevel: scoreHistoricalMetric(input.realYield, weights.fundamental.realYieldLevel, "LOWER_IS_BETTER", input.asOf),
+    realYieldChange3m: scoreHistoricalMetric(realYieldChange3m, weights.fundamental.realYieldChange3m, "LOWER_IS_BETTER", input.asOf),
+    dollarLevel: scoreHistoricalMetric(input.dollarIndex, weights.fundamental.dollarLevel, "LOWER_IS_BETTER", input.asOf),
+    dollarChange3m: scoreHistoricalMetric(dollarChange3m, weights.fundamental.dollarChange3m, "LOWER_IS_BETTER", input.asOf),
     etfFlow: input.etfFlow
       ? scoreHistoricalMetric(input.etfFlow, weights.fundamental.etfFlow, "HIGHER_IS_BETTER", input.asOf)
       : { rawValue: null, percentile: null, score: null, weight: weights.fundamental.etfFlow, source: "UNAVAILABLE", asOf: input.asOf, confidence: "LOW" },

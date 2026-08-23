@@ -69,5 +69,6 @@ describe("置信度年限与来源边界（H4/M11/溯源）", () => {
     const fiveYearSeries = seriesFrom("2021-08-23");
     expect(confidenceFor({ ...fiveYearSeries, source: "tushare-derived" })).toBe("MEDIUM");
     expect(confidenceFor({ ...fiveYearSeries, source: "tushare-derived-forward-pe" })).toBe("MEDIUM");
+    expect(confidenceFor({ ...fiveYearSeries, source: "DERIVED:MOMENTUM_6M:tushare-derived" })).toBe("MEDIUM");
   });
 });

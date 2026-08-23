@@ -26,7 +26,7 @@ export default async function HoldingsPage() {
       )}
       <Card className="overflow-x-auto p-2">
         <table className="data-table min-w-[900px]">
-          <thead><tr><th>标的</th><th>资产桶</th><th>当前市值</th><th>总资产占比</th><th>类型</th><th>状态</th><th>数据时间</th></tr></thead>
+          <thead><tr><th>标的</th><th>资产桶</th><th>当前市值</th><th>可投资资产占比</th><th>类型</th><th>状态</th><th>数据时间</th></tr></thead>
           <tbody>
             {view.holdings.map((holding) => {
               const value = BigInt(holding.marketValueMinor);

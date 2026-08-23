@@ -32,6 +32,9 @@ export interface ManualImportPreview {
   summary: Array<{ subjectId: ScorableAssetBucket; metricCount: number; observationCount: number; latestAsOf: string }>;
 }
 
+/** 严格 ISO 8601 含时区的时间戳（M7；observedAt/availableAt 共用）。 */
+const ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
 const rowSchema = z.object({
   subjectType: z.literal("ASSET_BUCKET"),
   subjectId: z.enum(["GOLD", "VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"]),

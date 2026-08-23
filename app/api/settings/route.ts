@@ -4,7 +4,7 @@ import { DEFAULT_PORTFOLIO_ID, getPortfolioRecord, listHoldings } from "@/db/que
 import { portfolios } from "@/db/schema";
 import { DEFAULT_ALLOCATION_BANDS, DEFAULT_RISK_LIMITS } from "@/domain/settings";
 import { DEFAULT_SCORING_CONFIG } from "@/domain/scoring";
-import { apiError, apiSuccess, zodFields } from "@/lib/api";
+import { apiError, apiSuccess, parseJsonBody, zodFields } from "@/lib/api";
 import { reservedCashPayloadSchema } from "@/lib/validation";
 
 export async function GET() {
@@ -26,12 +26,9 @@ export async function GET() {
 }
 
 export async function PATCH(request: Request) {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return apiError("INVALID_JSON", "请求体必须是 JSON", 400);
-  }
+  const parsedBody = await parseJsonBody(request);
+  if (!parsedBody.ok) return parsedBody.response;
+  const body = parsedBody.body;
   const parsed = reservedCashPayloadSchema.safeParse(body);
   if (!parsed.success) return apiError("VALIDATION_ERROR", "预留资金格式无效", 422, zodFields(parsed.error));
 

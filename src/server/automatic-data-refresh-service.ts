@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { shanghaiDate } from "@/lib/shanghai";
 import { getDatabase } from "@/db/client";
 import { dataSourceStatus, metricObservations } from "@/db/schema";
 import type { ScorableAssetBucket } from "@/domain/types";
@@ -37,7 +38,6 @@ function degradeQuality<T extends { quality: "VALID" | "PARTIAL" }>(rows: readon
   return stale ? rows.map((row) => ({ ...row, quality: "PARTIAL" as const })) : [...rows];
 }
 
-function shanghaiDate(now: Date): string { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(now); }
 function yearsBefore(day: string, years: number): string { const date = new Date(`${day}T00:00:00Z`); date.setUTCFullYear(date.getUTCFullYear() - years); return date.toISOString().slice(0, 10); }
 function monthsBefore(day: string, months: number): string { const date = new Date(`${day}T00:00:00Z`); date.setUTCMonth(date.getUTCMonth() - months); return date.toISOString().slice(0, 10); }
 function providerMessage(result: ProviderResult<unknown>, label: string): string | null { return result.ok ? (result.data instanceof Array && result.data.length === 0 ? `${label}没有返回数据` : null) : `${label}：${result.error.code} ${result.error.message}`; }
@@ -136,28 +136,38 @@ function derivedEarningsGrowth(bucket: Exclude<ScorableAssetBucket, "GOLD">, row
  * ERP = 盈利收益率(100/PE_TTM) − 10 年实际利率（补全宽基权益便宜度支柱的缺失指标）。
  * 两个输入都是已入库的主数据序列；按 asOf 对齐取最近一期实际利率。
  */
+/**
+ * ERP = 盈利收益率(100/PE_TTM) − 10 年实际利率（补全宽基权益便宜度支柱的缺失指标）。
+ * 两个输入都是已入库的主数据序列；按 asOf 对齐取最近一期实际利率。
+ * 无前视（评审复查修复）：availableAt 取两个输入 availableAt 的较晚者——实际利率
+ * 为 T+1 18:00 发布时，对齐日的 ERP 最早也要到次日才可见。
+ * §27 惯例：provider=tushare-derived 的派生序列 quality 一律 PARTIAL（封顶 MEDIUM）。
+ */
 function deriveEquityRiskPremium(bucket: 'BROAD_EQUITY', runRows: ProviderMetricObservationInput[], evaluationEnd: string, fetchedAt: string): ProviderMetricObservationInput[] {
   const realYields = bucketMetricHistory("GOLD", ["REAL_YIELD_10Y"])
-    .map((row) => ({ asOf: row.asOf, value: Number(row.value) }))
-    .filter((point) => Number.isFinite(point.value))
+    .map((row) => ({ asOf: row.asOf, value: Number(row.value), availableAt: row.availableAt }))
+    .filter((point) => Number.isFinite(point.value) && point.availableAt !== undefined)
     .sort((first, second) => first.asOf.localeCompare(second.asOf));
   if (!realYields.length) return [];
-  const pes = new Map<string, number>();
+  const pes = new Map<string, { value: number; availableAt: string }>();
   for (const row of [...bucketMetricHistory(bucket, ["PE_TTM"]), ...runRows.filter((row) => row.metricKey === "PE_TTM")]) {
     const value = Number(row.value);
-    if (Number.isFinite(value) && value > 0) pes.set(row.asOf, value); // 本次运行行覆盖同日历史
+    const availableAt = row.availableAt ?? `${row.asOf}T18:00:00+08:00`;
+    if (Number.isFinite(value) && value > 0) pes.set(row.asOf, { value, availableAt }); // 本次运行行覆盖同日历史
   }
   const output: ProviderMetricObservationInput[] = [];
   for (const [asOf, pe] of Array.from(pes.entries()).sort(([a], [b]) => a.localeCompare(b))) {
     if (asOf > evaluationEnd) continue;
-    let realYield: number | null = null;
+    let realYield: { value: number; availableAt: string } | null = null;
     for (const point of realYields) {
-      if (point.asOf <= asOf) realYield = point.value;
+      if (point.asOf <= asOf) realYield = point;
       else break;
     }
-    if (realYield === null || realYield <= -90) continue; // 实际利率缺失或异常时不产出
-    const erp = 100 / pe - realYield;
+    if (realYield === null || realYield.value <= -90) continue; // 实际利率缺失或异常时不产出
+    const erp = 100 / pe.value - realYield.value;
     if (!Number.isFinite(erp)) continue;
+    // ISO 字符串字典序即可比较先后
+    const availableAt = pe.availableAt > realYield.availableAt ? pe.availableAt : realYield.availableAt;
     output.push({
       subjectType: "ASSET_BUCKET",
       subjectId: bucket,
@@ -166,17 +176,27 @@ function deriveEquityRiskPremium(bucket: 'BROAD_EQUITY', runRows: ProviderMetric
       unit: "percent",
       provider: "tushare-derived",
       observedAt: `${asOf}T15:00:00+08:00`,
-      availableAt: `${asOf}T18:00:00+08:00`,
+      availableAt,
       asOf,
       fetchedAt,
-      quality: "VALID",
-      metadataJson: JSON.stringify({ formula: "100/PE_TTM - REAL_YIELD_10Y" }),
+      quality: "PARTIAL",
+      metadataJson: JSON.stringify({ formula: "100/PE_TTM - REAL_YIELD_10Y", inputs: { peAvailableAt: pe.availableAt, realYieldAvailableAt: realYield.availableAt } }),
     });
   }
   return output;
 }
 
 function needsInitialHistory() { return !getDatabase().select({ id: metricObservations.id }).from(metricObservations).where(eq(metricObservations.metricKey, "PRICE_CLOSE")).limit(1).get(); }
+/**
+ * 清理早期 ERP 派生行：当时 quality 误标 VALID 且 availableAt 未按输入取晚（无前视复查修复）。
+ * 这些行已被按日重新推导的 PARTIAL 行完全取代，保留会造成同日双行。
+ */
+function removeLegacyValidEquityRiskPremium() {
+  getDatabase()
+    .delete(metricObservations)
+    .where(and(eq(metricObservations.metricKey, "EQUITY_RISK_PREMIUM"), eq(metricObservations.quality, "VALID")))
+    .run();
+}
 function removeInvalidLegacyRealYield() {
   // Before v1.1 the Tushare us_trycr y10 field was stored as REAL_YIELD_10Y.
   // Its economic meaning is not verified, so preserving it would silently create
@@ -209,7 +229,7 @@ async function refreshAggregatedValuation(provider: TushareProvider, proxies: Tu
   }
   return output;
 }
-async function refreshGoldMacro(fred: FredProvider, range: { start: string; end: string }, warnings: string[]): Promise<{ rows: ProviderMetricObservationInput[]; okCount: number; total: number }> {
+async function refreshGoldMacro(fred: FredProvider, range: { start: string; end: string }, warnings: string[]): Promise<{ rows: ProviderMetricObservationInput[]; fetchedSeriesCount: number; total: number }> {
   // FRED 的失败只记在 FRED 自己名下（Code Review M13），不再混入共享 warnings 让 tushare 背锅。
   const results = await Promise.all((["REAL_YIELD_10Y", "DOLLAR_INDEX"] as const).map(async (metricKey) => {
     const result = await fred.getMacroSeries({ seriesId: metricKey, range });
@@ -217,7 +237,7 @@ async function refreshGoldMacro(fred: FredProvider, range: { start: string; end:
     if (warning) warnings.push(warning);
     return result.ok ? metricRows("GOLD", result) : [];
   }));
-  return { rows: results.flat(), okCount: results.filter((rows) => rows.length > 0).length, total: 2 };
+  return { rows: results.flat(), fetchedSeriesCount: results.filter((rows) => rows.length > 0).length, total: 2 };
 }
 async function refreshGoldEtfFlow(provider: TushareProvider, range: { start: string; end: string }, warnings: string[]): Promise<ProviderMetricObservationInput[]> {
   const shares = []; const navs = []; let fetchedAt = new Date().toISOString();
@@ -275,6 +295,7 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
   const now = options.now ?? new Date(); const fetchedAt = now.toISOString(); const end = shanghaiDate(now); const provider = options.provider ?? new TushareProvider(); const fred = options.fredProvider ?? new FredProvider(); const proxies = options.proxies ?? getTushareScoreProxies();
   if (!process.env.TUSHARE_TOKEN && !options.provider) { saveProviderStatus("tushare", "NOT_CONFIGURED", fetchedAt, ["尚未在本机环境中配置 TUSHARE_TOKEN"], { index_dailybasic: "UNKNOWN" }); return { provider: "tushare", status: "NOT_CONFIGURED", fetchedAt, inserted: 0, updated: 0, buckets: [] }; }
   removeInvalidLegacyRealYield();
+  removeLegacyValidEquityRiskPremium();
   const fullBackfill = options.fullBackfill ?? (process.env.FULL_BACKFILL === "true" || Boolean(needsInitialHistory())); const range = { start: fullBackfill ? yearsBefore(end, 5) : yearsBefore(end, 1), end }; const warnings: string[] = []; const fredWarnings: string[] = []; const byBucket = new Map<ScorableAssetBucket, ProviderMetricObservationInput[]>();
   // 受控并发（Code Review M16）：provider 内部限流器负责 RPM，外层并行缩短整轮耗时。
   await Promise.all(proxies.map(async (proxy) => {
@@ -307,7 +328,7 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
   const status = reports.some((report) => report.observationCount > 0) ? (warnings.length ? "DEGRADED" : "READY") : "ERROR"; saveProviderStatus("tushare", status, fetchedAt, warnings, { index_dailybasic: directCapability, index_weight: "READY", daily_basic: "READY", fina_indicator: fullBackfill ? "REQUESTED" : "INCREMENTAL_PENDING", fund_share: "READY", fund_nav: "READY" }); // FRED 状态独立评估（Code Review M13）：不凭环境变量标 READY，也不把 FRED 失败算进 tushare。
   const fredStatus: AutomaticRefreshReport["status"] = !process.env.FRED_API_KEY
     ? "NOT_CONFIGURED"
-    : goldMacro.total > 0 && goldMacro.okCount === 0
+    : goldMacro.total > 0 && goldMacro.fetchedSeriesCount === 0
       ? "ERROR"
       : fredWarnings.length
         ? "DEGRADED"

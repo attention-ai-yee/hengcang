@@ -66,6 +66,11 @@ function failureCode(response: TushareResponse) {
   return "UPSTREAM_ERROR" as const;
 }
 
+/** 截断即降级：分页未拉全的响应不得标 VALID（M4；四处调用共用）。 */
+function qualityFromTruncation(truncated: boolean): "VALID" | "PARTIAL" {
+  return truncated ? "PARTIAL" : "VALID";
+}
+
 export class TushareProvider implements MarketDataProvider {
   readonly id = "tushare";
   private readonly limiter = new TushareRateLimiter();
@@ -118,7 +123,7 @@ export class TushareProvider implements MarketDataProvider {
           currency: "CNY",
         }];
       });
-      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: (truncated ? "PARTIAL" : "VALID") as "VALID" | "PARTIAL" };
+      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: qualityFromTruncation(truncated) };
     } catch (error) {
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Tushare 请求失败");
     }
@@ -165,7 +170,7 @@ export class TushareProvider implements MarketDataProvider {
           }];
         });
       });
-      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: (truncated ? "PARTIAL" : "VALID") as "VALID" | "PARTIAL" };
+      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: qualityFromTruncation(truncated) };
     } catch (error) {
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Tushare 请求失败");
     }
@@ -206,7 +211,7 @@ export class TushareProvider implements MarketDataProvider {
           }];
         });
       });
-      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: (truncated ? "PARTIAL" : "VALID") as "VALID" | "PARTIAL" };
+      return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: qualityFromTruncation(truncated) };
     } catch (error) {
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Tushare 请求失败");
     }
@@ -281,7 +286,7 @@ export class TushareProvider implements MarketDataProvider {
     try {
       const { response, truncated } = await this.query(apiName, params, fields);
       if (response.code !== 0 || !response.data) return providerFailure(this.id, failureCode(response), response.msg ?? "Tushare 返回错误");
-      return { ok: true, data: rowsOf(response).flatMap(map), provider: this.id, fetchedAt: new Date().toISOString(), quality: (truncated ? "PARTIAL" : "VALID") as "VALID" | "PARTIAL" };
+      return { ok: true, data: rowsOf(response).flatMap(map), provider: this.id, fetchedAt: new Date().toISOString(), quality: qualityFromTruncation(truncated) };
     } catch (error) {
       return providerFailure(this.id, "UPSTREAM_ERROR", error instanceof Error ? error.message : "Tushare 请求失败");
     }

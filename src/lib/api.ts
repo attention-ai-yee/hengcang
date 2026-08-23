@@ -25,3 +25,17 @@ export function zodFields(error: ZodError): Record<string, string[]> {
   }
   return fields;
 }
+
+/**
+ * 解析 JSON 请求体；失败时返回统一的 INVALID_JSON 400。
+ * （评审复查：收敛 settings / manual-scores / holdings 三处逐字重复。）
+ */
+export async function parseJsonBody(
+  request: Request,
+): Promise<{ ok: true; body: unknown } | { ok: false; response: ReturnType<typeof apiError> }> {
+  try {
+    return { ok: true, body: await request.json() };
+  } catch {
+    return { ok: false, response: apiError("INVALID_JSON", "请求体必须是 JSON", 400) };
+  }
+}

@@ -23,6 +23,22 @@ export const FRED_SERIES_MAP = {
   DOLLAR_INDEX: "DTWEXBGS",
 } as const;
 
+/**
+ * 各序列官方文档化发布时点对应的北京时间偏移（评审复查 M12：
+ * 原一刀切「次日 18:00」不是真实元数据；改为引用来源的保守滞后）。
+ * - DFII10：美国财政部日度票息收益率曲线约 15:30 ET 发布、FRED 当晚入库
+ *   （home.treasury.gov，Daily Treasury Par Yield Curve Rates）。
+ *   取北京时间次日 12:00：冬令时 15:30 ET = 次日 04:30 北京，余量 7 小时。
+ * - DTWEXBGS：美联储 H.10 午间美元汇率约 12:00 ET 发布
+ *   （federalreserve.gov/releases/h10）。
+ *   取北京时间次日 06:00：冬令时 12:00 ET = 次日 01:00 北京，余量 5 小时。
+ * 未映射序列退回次日 18:00（原保守值）。夏令时切换只影响 1 小时，被余量覆盖。
+ */
+const FRED_AVAILABLE_AT_OFFSET: Record<string, string> = {
+  DFII10: "T12:00:00+08:00",
+  DTWEXBGS: "T06:00:00+08:00",
+};
+
 export class FredProvider implements MarketDataProvider {
   readonly id = "fred";
 
@@ -51,9 +67,9 @@ export class FredProvider implements MarketDataProvider {
           value: observation.value,
           unit: request.seriesId === "REAL_YIELD_10Y" ? "percent" : "index",
           observedAt: `${observation.date}T00:00:00Z`,
-          // 无前视（Code Review M12）：DFII10/DTWEXBGS 为 T+1 发布，availableAt 取
-          // 观察日次日晚间；不使用 realtime_start（未请求 vintage 时恒等于观察日）。
-          availableAt: `${nextDay(observation.date)}T18:00:00+08:00`,
+          // 无前视（Code Review M12）：按各序列官方文档化发布时点取保守 availableAt；
+          // 不使用 realtime_start（未请求 vintage 时恒等于观察日）。见 FRED_AVAILABLE_AT_OFFSET。
+          availableAt: `${nextDay(observation.date)}${FRED_AVAILABLE_AT_OFFSET[seriesId] ?? "T18:00:00+08:00"}`,
           asOf: observation.date,
         }));
       return { ok: true, data, provider: this.id, fetchedAt: new Date().toISOString(), quality: "VALID" };

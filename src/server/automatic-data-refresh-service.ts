@@ -9,6 +9,7 @@ import { FredProvider } from "@/providers/fred";
 import { aggregateDividendYield, aggregateFundamentalMetric, aggregateHarmonicMetric, type AggregateMetricResult, type EquityFundamentalSnapshot, type IndexWeightPoint } from "@/providers/tushare/index-aggregator";
 import { cacheIndexWeights, readLatestIndexWeightSnapshot, readLatestIndexWeights } from "@/providers/tushare/index-weight-cache";
 import { scoreDividendStability } from "@/providers/tushare/dividend-stability";
+import type { TushareDividendRecord } from "@/providers/tushare/index";
 import { calculateGoldEtfFlow3m } from "@/providers/tushare/gold-etf-flow";
 import { TushareProvider } from "@/providers/tushare";
 import { getGoldEtfProxies, getTushareScoreProxies, type TushareScoreProxy } from "@/providers/tushare/proxies";
@@ -273,17 +274,45 @@ async function refreshFundamentals(provider: TushareProvider, proxies: TushareSc
   return output;
 }
 async function refreshDividendStability(provider: TushareProvider, valueProxy: TushareScoreProxy | undefined, evaluationDate: string, fullBackfill: boolean, warnings: string[], fetchedAt: string): Promise<ProviderMetricObservationInput[]> {
-  if (!fullBackfill || !valueProxy) return [];
+  if (!valueProxy) return [];
   const weightInfo = readWeightsWithAge(valueProxy.symbol, evaluationDate, warnings); if (!weightInfo) return [];
+  // 分红历史每次运行只拉取一次；历史年界行仅在全量回填时重建，评估日行始终刷新
   const weights = weightInfo.points;
-  const scores: Array<{ symbol: string; score: number }> = [];
+  const historyBySymbol = new Map<string, TushareDividendRecord[]>();
   for (const { constituentSymbol } of weights) {
     const history = await provider.getEquityDividendHistory(constituentSymbol); const warning = providerMessage(history, `${constituentSymbol}分红记录`); if (warning) { warnings.push(warning); continue; }
-    if (!history.ok) continue; const score = scoreDividendStability(history.data, evaluationDate); if (score !== null) scores.push({ symbol: constituentSymbol, score });
+    if (history.ok) historyBySymbol.set(constituentSymbol, history.data);
   }
-  const scoreBySymbol = new Map(scores.map((item) => [item.symbol, item.score])); const valid = weights.flatMap((weight) => scoreBySymbol.has(weight.constituentSymbol) ? [{ weight: weight.weight, score: scoreBySymbol.get(weight.constituentSymbol)! }] : []); const totalWeight = weights.reduce((sum, row) => sum + row.weight, 0); const validWeight = valid.reduce((sum, row) => sum + row.weight, 0); const coverage = totalWeight > 0 ? validWeight / totalWeight : 0;
-  if (coverage < 0.6 || validWeight <= 0) return [];
-  return aggregateRows("VALUE_DIVIDEND", degradeQuality([{ metricKey: "DIVIDEND_STABILITY_SCORE", value: valid.reduce((sum, row) => sum + row.weight * row.score, 0) / validWeight, constituentCoverage: coverage, constituentCount: weights.length, validConstituentCount: valid.length, quality: coverage >= 0.8 ? "VALID" : "PARTIAL", effectiveDate: weights[0]?.effectiveDate ?? evaluationDate }], weightInfo.stale), evaluationDate, fetchedAt);
+
+  const buildRowFor = (date: string) => {
+    const scored = weights.flatMap(({ constituentSymbol, weight }) => {
+      const records = historyBySymbol.get(constituentSymbol);
+      if (!records) return [];
+      const score = scoreDividendStability(records, date);
+      return score === null ? [] : [{ weight: weight, score: score }];
+    });
+    const totalWeight = weights.reduce((sum, row) => sum + row.weight, 0);
+    const validWeight = scored.reduce((sum, row) => sum + row.weight, 0);
+    const coverage = totalWeight > 0 ? validWeight / totalWeight : 0;
+    if (coverage < 0.6 || validWeight <= 0 || scored.length === 0) return null;
+    return degradeQuality([{ metricKey: "DIVIDEND_STABILITY_SCORE" as const, value: scored.reduce((sum, row) => sum + row.weight * row.score, 0) / validWeight, constituentCoverage: coverage, constituentCount: weights.length, validConstituentCount: scored.length, quality: coverage >= 0.8 ? "VALID" : "PARTIAL", effectiveDate: weights[0]?.effectiveDate ?? date }], weightInfo.stale);
+  };
+  const output: ProviderMetricObservationInput[] = [];
+  const dates = new Set<string>([evaluationDate]);
+  if (fullBackfill) {
+    // 分数仅在跨年时变化：回填窗口内每个自然年的 12-31 各一条
+    const firstYear = Number(yearsBefore(evaluationDate, 5).slice(0, 4));
+    const endYear = Number(evaluationDate.slice(0, 4));
+    for (let year = firstYear; year <= endYear; year += 1) {
+      const yearEnd = String(year) + "-12-31";
+      if (yearEnd <= evaluationDate) dates.add(yearEnd);
+    }
+  }
+  for (const date of Array.from(dates).sort()) {
+    const metrics = buildRowFor(date);
+    if (metrics) output.push(...aggregateRows("VALUE_DIVIDEND", metrics, date, fetchedAt));
+  }
+  return output;
 }
 function saveProviderStatus(provider: string, status: AutomaticRefreshReport["status"], now: string, errors: string[], capabilities: Record<string, string>) {
   const db = getDatabase(); const previous = db.select().from(dataSourceStatus).where(eq(dataSourceStatus.provider, provider)).get();

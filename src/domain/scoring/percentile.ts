@@ -49,7 +49,10 @@ function historyConfidence(metric: MetricSeries, evaluationDate: string): Confid
   const earliest = history.reduce((min, point) => (point.asOf < min ? point.asOf : min), history[0].asOf);
   const years = fullYearsBetween(earliest, evaluationDate);
   if (years < DEFAULT_SCORING_CONFIG.history.mediumYears) return "LOW";
-  const containsPartial = metric.quality === "PARTIAL" || history.some((point) => point.quality === "PARTIAL");
+  // 规格 v1.1 §42 伪码：PARTIAL / manual 均指被评序列自身的 quality。
+  // 不再因历史早期行（聚合成分覆盖不足时期的 PARTIAL）永久封顶——
+  // 否则「history >= 3y + VALID -> HIGH eligible」对聚合基本面不可达。
+  const containsPartial = metric.quality === "PARTIAL";
   const sourceUpper = metric.source.toUpperCase();
   if (containsPartial) return "MEDIUM";
   if (!sourceUpper.includes("DERIVED")) {

@@ -71,4 +71,17 @@ describe("置信度年限与来源边界（H4/M11/溯源）", () => {
     expect(confidenceFor({ ...fiveYearSeries, source: "tushare-derived-forward-pe" })).toBe("MEDIUM");
     expect(confidenceFor({ ...fiveYearSeries, source: "DERIVED:MOMENTUM_6M:tushare-derived" })).toBe("MEDIUM");
   });
+
+  it("历史早期的 PARTIAL 行不再永久封顶：当前 VALID 且 >=3 年可达 HIGH（规格 v1.1 §42 字面语义）", () => {
+    const series = seriesFrom("2021-08-23");
+    const withOldPartial = {
+      ...series,
+      quality: "VALID" as const,
+      history: [
+        { value: 1, asOf: "2021-08-23", availableAt: "2021-08-23T18:00:00+08:00", quality: "PARTIAL" as const },
+        { value: 3, asOf: EVAL_DATE, availableAt: EVAL_DATE + "T18:00:00+08:00", quality: "VALID" as const },
+      ],
+    };
+    expect(confidenceFor(withOldPartial)).toBe("HIGH");
+  });
 });

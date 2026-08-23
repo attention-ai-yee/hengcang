@@ -76,6 +76,15 @@ export function combineComponents(
   return { score, coverage: round1(coverage * 100) / 100, confidence, components, missingMetrics };
 }
 
+/**
+ * Trend Model v1.3：把长期趋势与均线结构从二值开关改为连续线性带。
+ * 距离以百分点表示，落在 ±halfBandPct 带内线性插值（中点 50 分），两端饱和。
+ * 可解释性优先于 logistic：Price = MA200 × 0.98 时长期趋势分约 30，一眼可算。
+ */
+function bandScore(distancePct: number, halfBandPct: number): number {
+  return Math.min(100, Math.max(0, 50 + (distancePct / halfBandPct) * 50));
+}
+
 export function calculateTrend(input: TrendModelInput, asOf: string): SubscoreResult {
   const weights = DEFAULT_SCORING_CONFIG.componentWeights.trend;
   const price = input.price.value;
@@ -85,10 +94,18 @@ export function calculateTrend(input: TrendModelInput, asOf: string): SubscoreRe
   const priceSource = input.price.source;
   const priceConfidence = input.price.confidence ?? (priceSource.toUpperCase().includes("MANUAL") ? "LOW" : "HIGH");
 
-  const ma200Score = price === null || ma200 === null ? null : price > ma200 ? 100 : 0;
+  // 长期趋势：价格相对 MA200 的偏离（百分点），±5% 线性带（v1.3）
+  const d200 = price === null || ma200 === null || ma200 === 0 ? null : ((price / ma200 - 1) * 100);
+  const ma200Score = d200 === null ? null : bandScore(d200, 5);
+  // 均线结构：短期(MA20/MA60，±5% 带)占 35% + 长期(MA60/MA200，±10% 带)占 65%（v1.3）
   let alignmentScore: number | null = null;
-  if (ma60 !== null && ma200 !== null) {
-    alignmentScore = ma20 !== null && ma20 > ma60 && ma60 > ma200 ? 100 : ma60 > ma200 ? 66.6667 : 0;
+  if (ma60 !== null && ma200 !== null && ma60 !== 0 && ma200 !== 0) {
+    const longScore = bandScore((ma60 / ma200 - 1) * 100, 10);
+    if (ma20 !== null && ma20 !== 0) {
+      alignmentScore = bandScore((ma20 / ma60 - 1) * 100, 5) * 0.35 + longScore * 0.65;
+    } else {
+      alignmentScore = longScore;
+    }
   }
 
   return combineComponents({

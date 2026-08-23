@@ -76,7 +76,7 @@ export default async function ScoresPage() {
               <div className="mt-5 grid grid-cols-3 gap-3 text-center text-sm">
                 <Metric label={isGold ? "价格吸引力" : "便宜程度"} value={score.cheapnessScore} />
                 <Metric label={isGold ? "宏观支持度" : "基本面"} value={score.fundamentalScore} />
-                <Metric label={isGold ? "宏观支持度低 ≠ 投资逻辑失效" : "趋势"} value={score.trendScore} />
+                                <Metric label="趋势" value={score.trendScore} />
               </div>
               <p className="mt-4 text-sm font-semibold">{STATE_LABELS[score.recommendationState as RecommendationState]}</p>
               <p className="mt-1 text-xs text-[#748078]">as_of {score.asOf}</p>

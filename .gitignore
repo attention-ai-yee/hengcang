@@ -10,3 +10,4 @@ data/*.db-*
 *.tsbuildinfo
 .playwright-cli/
 output/playwright/*.png
+logs/

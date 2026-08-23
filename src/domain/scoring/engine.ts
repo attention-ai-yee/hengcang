@@ -124,6 +124,8 @@ export function calculateAssetScore(
     ? worseConfidence(opportunity.confidence, risk.confidenceOverride)
     : opportunity.confidence;
   const rules = applyRiskRules({
+    // 必须传入 bucket：否则黄金会因 undefined !== "GOLD" 误入通用基本面熔断
+    bucket: input.bucket,
     opportunityScore: opportunity.score,
     fundamentalScore: subscores.fundamental.score,
     fundamentalCoverage: subscores.fundamental.coverage,

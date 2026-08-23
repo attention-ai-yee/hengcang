@@ -74,7 +74,9 @@ export function deriveChangeSeries(input: MetricSeries, lookbackDays: number): M
   return {
     currentValue,
     history,
-    source: input.source + "-derived-change-" + lookbackDays + "d",
+    // 确定性数学变换（TRANSFORMED）：沿用 DERIVED:<特征>:<主数据源> 命名，
+    // 使其继承主数据源置信度；代理类（PROXY，如 TTM 冒充 Forward）仍按普通派生封顶 MEDIUM。
+    source: "DERIVED:CHANGE_" + lookbackDays + "D:" + input.source,
     asOf: input.asOf,
     availableAt: currentAvailableAt,
     quality: currentQuality,

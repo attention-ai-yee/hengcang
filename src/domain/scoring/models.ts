@@ -205,9 +205,19 @@ function calculateTechGrowth(input: TechGrowthInput) {
   return { cheapness, fundamental, trend: calculateTrend(input.trend, input.asOf) };
 }
 
+/**
+ * 该指标能否支撑 HIGH 置信度（与 historyConfidence 的判定一致）：
+ * 最新数据非 PARTIAL 且来源不是派生/代理。确定性变换类来源应使用
+ * DERIVED:<特征>:<主数据源> 命名以获得豁免。
+ */
+function metricCanSupportHighConfidence(metric: { source: string; quality?: "VALID" | "PARTIAL" }): boolean {
+  return metric.quality !== "PARTIAL" && !metric.source.toUpperCase().includes("DERIVED");
+}
 function calculateBroadEquity(input: BroadEquityInput) {
   const weights = DEFAULT_SCORING_CONFIG.componentWeights.BROAD_EQUITY;
-  const cheapness = input.equityRiskPremium
+  // 低可信 ERP 不进入主评分：当前 EQUITY_RISK_PREMIUM 是「沪深300 盈利收益率 − 美国10Y 实际利率」
+  // 的估算代理（PARTIAL），且跨市场语义存疑；回退到 PE/PB 双因子（cheapnessWithoutErp）。
+  const cheapness = input.equityRiskPremium && metricCanSupportHighConfidence(input.equityRiskPremium)
     ? combineComponents({
         pe: scoreHistoricalMetric(input.pe, weights.cheapness.pe, "LOWER_IS_BETTER", input.asOf),
         pb: scoreHistoricalMetric(input.pb, weights.cheapness.pb, "LOWER_IS_BETTER", input.asOf),

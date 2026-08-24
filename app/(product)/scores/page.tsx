@@ -37,8 +37,8 @@ export default async function ScoresPage() {
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <ModelSummary title="黄金" text="价格吸引力：5 年价格位置、MA200 偏离、3M 拥挤；宏观支持度：实际利率水平与 3M 变化、美元指数水平与 3M 变化、国内黄金 ETF 资金流代理（15%）、央行购金需求（15%）。宏观支持度低只代表逆风，不代表长期配置逻辑失效。" />
             <ModelSummary title="红利与价值" text="便宜程度：PE 35%、PB 25%、股息率 40%；基本面：盈利增长 40%、ROE 30%、分红稳定性 30%。" />
-            <ModelSummary title="科技与成长" text="便宜程度：Forward PE 40%、PS 20%、增长调整估值 40%；基本面：盈利、营收和盈利预期修正。" />
-            <ModelSummary title="宽基权益" text="便宜程度：PE、PB、股权风险溢价；基本面：指数盈利增长与盈利预期修正。" />
+            <ModelSummary title="科技与成长" text="便宜程度（v1.4，已实现基本面模型）：PE_TTM 45%、PS 25%、PEG_TTM 30%（PE 与实际盈利增长的确定性比值）；基本面：已实现盈利增长 55%、营收增长 45%。不再使用前瞻预测数据。" />
+            <ModelSummary title="宽基权益" text="便宜程度：PE 60%、PB 40%（股权风险溢价为低可信派生代理，不进入主评分）；基本面：指数盈利增长。" />
           </div>
         </details>
       </Card>

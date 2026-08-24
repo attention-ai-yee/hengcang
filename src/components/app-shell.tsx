@@ -6,7 +6,6 @@ import {
   FlaskConical,
   Gauge,
   LayoutDashboard,
-  Scale,
   Settings,
   WalletCards,
 } from "lucide-react";
@@ -15,7 +14,6 @@ const navigation = [
   { href: "/dashboard", label: "总览", icon: LayoutDashboard },
   { href: "/scores", label: "资产评分", icon: Gauge },
   { href: "/holdings", label: "持仓与风险", icon: WalletCards },
-  { href: "/rebalance", label: "再平衡", icon: Scale },
   { href: "/decisions", label: "决策日志", icon: BookOpen },
   { href: "/backtest", label: "策略回测", icon: FlaskConical },
   { href: "/data-status", label: "数据状态", icon: Database },

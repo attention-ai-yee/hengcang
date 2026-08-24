@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Card, PageIntro, StatusPill } from "@/components/ui";
 import { formatBps, formatMoneyMinor } from "@/domain/portfolio";
-import type { AssetBucket } from "@/domain/types";
+import { ASSET_BUCKETS, type AssetBucket } from "@/domain/types";
 import { BUCKET_LABELS, instrumentTypeLabel } from "@/lib/presentation";
 import { getPortfolioView } from "@/server/portfolio-service";
 
@@ -11,6 +11,9 @@ export default async function HoldingsPage() {
   const view = await getPortfolioView();
   // 占比与预留资金扣除已在服务层统一计算（Code Review M15），这里只做展示。
   const risks = new Map(view.holdingRisks.map((risk) => [risk.id, risk]));
+  // 再平衡参考所需（原 /rebalance 页逻辑，随菜单合并迁入）
+  const total = BigInt(view.summary.investableAssetsMinor);
+  const targets = new Map(view.targets.map((target) => [target.assetBucket, target]));
   return (
     <>
       <PageIntro
@@ -47,6 +50,29 @@ export default async function HoldingsPage() {
           </tbody>
         </table>
       </Card>
+      {/* 再平衡参考：原独立菜单并入持仓页（目标权重 vs 当前占比） */}
+      <div className="mt-8">
+        <h2 className="text-lg font-semibold text-[#27342e]">再平衡参考</h2>
+        <p className="mt-1 text-sm text-[#68756e]">差额仅用于理解偏离；只有评分、仓位上限、硬风险和冷却条件同时允许时，系统才会显示可执行状态。</p>
+      </div>
+      <div className="mt-4 grid gap-4">
+        {ASSET_BUCKETS.map((bucket) => {
+          const current = BigInt(view.summary.byBucket[bucket].investableValueMinor);
+          const actualBps = view.summary.byBucket[bucket].weightBps;
+          const target = targets.get(bucket);
+          const targetBps = target?.targetBps ?? 0;
+          const targetValue = (total * BigInt(targetBps)) / 10_000n;
+          const difference = targetValue - current;
+          const withinBand = target ? actualBps >= target.minBps && actualBps <= target.maxBps : true;
+          return (
+            <Card key={bucket} className="grid gap-4 p-5 md:grid-cols-[1fr_auto_auto] md:items-center">
+              <div><h3 className="font-semibold">{BUCKET_LABELS[bucket]}</h3><p className="mt-1 text-sm text-[#68756e]">当前 {formatBps(actualBps)} · 目标 {formatBps(targetBps)} · 区间 {formatBps(target?.minBps ?? 0)}–{formatBps(target?.maxBps ?? 0)}</p></div>
+              <div className="text-left md:text-right"><span className="block text-xs text-[#728078]">回到中性的参考差额</span><strong>{difference >= 0n ? "+" : "−"}{formatMoneyMinor(difference >= 0n ? difference : -difference)}</strong></div>
+              <StatusPill tone={withinBand ? "good" : "warn"}>{withinBand ? "保持" : actualBps > (target?.maxBps ?? 0) ? "停止新增" : "等待评分确认"}</StatusPill>
+            </Card>
+          );
+        })}
+      </div>
     </>
   );
 }

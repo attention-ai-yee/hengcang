@@ -16,9 +16,10 @@
 - `reserved_cash` 预留资金与基于可投资资产的仓位计算；
 - 资产汇总、单股/主题 ETF 上限和规范案例 A–E 单元测试；
 - Tushare 自动纵切：近 5 年行情、指数估值、实际利率、派生指标、观察值入库与 ScoreSnapshot；
-- Manual CSV/JSON 预览、幂等提交和手工覆盖优先级。
+- Manual CSV/JSON 预览、幂等提交和手工覆盖优先级；
+- Point-in-time 回测：月末公共评估日网格上对比持有基准、固定比例（月度/季度）再平衡、评分映射（±仓位上限）与状态门控策略，信号 T+1 执行并计入交易成本，输出总收益/年化/最大回撤/最差年度/最长回撤期/波动率/夏普/换手。
 
-Decision Log 结果回填、完整回测执行器及其他自动 Provider 的全部指标映射仍属于后续业务纵切。
+Decision Log 结果回填及其他自动 Provider 的全部指标映射仍属于后续业务纵切。
 
 ## 本地启动
 
@@ -44,6 +45,7 @@ pnpm db:generate   # 根据 schema 生成 migration
 pnpm db:migrate    # 应用 migration
 pnpm db:seed       # 写入本地示例资产模板
 pnpm data:refresh  # 自动拉取 Tushare 数据并重算评分
+pnpm backtest      # 只读回测报告（--persist 落库，--cost N 覆盖成本假设）
 pnpm worker        # 启动本地定时刷新进程
 ```
 
@@ -116,5 +118,5 @@ OpportunityScore = 50% × Cheapness + 30% × Fundamental + 20% × Trend
 1. FRED / Twelve Data 指标映射与多源 fallback；
 2. 风险聚合、迟滞、冷却和信号去重；
 3. Decision Log 写入与结果回填；
-4. Point-in-time 回测执行器；
+4. 回测增强：季度/月度频率参数化 UI、净值曲线图、参数敏感性扫描；
 5. E2E 与 Docker 本地部署。

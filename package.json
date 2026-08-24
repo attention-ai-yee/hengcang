@@ -20,6 +20,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx scripts/seed.ts",
     "data:refresh": "tsx scripts/refresh.ts",
+    "backtest": "tsx scripts/backtest.ts",
     "worker": "tsx scripts/worker.ts"
   },
   "dependencies": {

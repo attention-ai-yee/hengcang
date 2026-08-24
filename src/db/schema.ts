@@ -247,6 +247,8 @@ export const backtestRuns = sqliteTable("backtest_runs", {
   startDate: text("start_date").notNull(),
   endDate: text("end_date").notNull(),
   transactionCostBps: integer("transaction_cost_bps").notNull(),
+  /** 同一次「运行回测」产出的所有策略行共享一个批次号，页面按批次分组展示最新一次 */
+  batchId: text("batch_id"),
   inputsJson: text("inputs_json").notNull(),
   configSnapshotId: text("config_snapshot_id").references(() => configSnapshots.id),
   startedAt: text("started_at"),
@@ -257,10 +259,13 @@ export const backtestRuns = sqliteTable("backtest_runs", {
 export const backtestResults = sqliteTable("backtest_results", {
   id: text("id").primaryKey(),
   backtestRunId: text("backtest_run_id").notNull().references(() => backtestRuns.id, { onDelete: "cascade" }),
+  totalReturnBps: integer("total_return_bps"),
   cagrBps: integer("cagr_bps"),
   maxDrawdownBps: integer("max_drawdown_bps"),
   volatilityBps: integer("volatility_bps"),
   sharpeMilli: integer("sharpe_milli"),
+  worstYearBps: integer("worst_year_bps"),
+  longestDrawdownDays: integer("longest_drawdown_days"),
   turnoverBps: integer("turnover_bps"),
   tradeCount: integer("trade_count"),
   seriesJson: text("series_json").notNull(),

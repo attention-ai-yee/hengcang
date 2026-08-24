@@ -5,6 +5,12 @@ import { loadBacktestInput, runAllBacktests } from "@/server/backtest-service";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** 交易成本假设可调（bps），默认 10，限制在 0–200 防止误输入。 */
+function parseCostBps(raw: unknown): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  return Math.min(200, Math.max(0, Math.round(raw)));
+}
+
 function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization");
   if (!header || !header.startsWith("Bearer ")) return null;
@@ -26,9 +32,12 @@ export async function POST(request: Request) {
     }
   }
   try {
+    const body = await request.json().catch(() => ({}) as Record<string, unknown>);
     const input = await loadBacktestInput();
-    const summaries = await runAllBacktests(input);
-    return NextResponse.json({ data: summaries });
+    if (input.warnings?.length) console.warn("[backtest] 数据告警:", input.warnings.join("; "));
+    const costBps = parseCostBps((body as { costBps?: unknown })?.costBps);
+    const summaries = await runAllBacktests(costBps === undefined ? input : { ...input, costBps });
+    return NextResponse.json({ data: { batchId: summaries[0]?.batchId ?? null, summaries } });
   } catch (error) {
     return NextResponse.json({ error: { code: "BACKTEST_FAILED", message: error instanceof Error ? error.message : "回测失败", fields: {} } }, { status: 500 });
   }

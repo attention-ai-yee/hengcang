@@ -82,6 +82,15 @@ export async function refreshScoresForBuckets(
     createdAt: now,
   }).run();
 
+  // 历史回填的点内时间纪律：OVERWEIGHT 闸门只反映「当时」的仓位。批量请求里
+  // 只有各桶自己的最新评估日使用当前持仓权重；更早的日期不注入今天的仓位，
+  // 否则某桶现在超限时会把该桶全部历史快照盖成 OVERWEIGHT（规格 §14 使用当时可获得的数据）。
+  const latestAsOfByBucket = new Map<string, string>();
+  for (const request of requests) {
+    const latest = latestAsOfByBucket.get(request.bucket);
+    if (!latest || request.asOf > latest) latestAsOfByBucket.set(request.bucket, request.asOf);
+  }
+
   const portfolio = await getPortfolioView();
   const targets = new Map(portfolio.targets.map((target) => [target.assetBucket, target]));
   const builder = new ScoreInputBuilder(new SqliteMetricSeriesRepository({
@@ -117,7 +126,9 @@ export async function refreshScoresForBuckets(
     const input = await builder.build(request.bucket, request.asOf);
     const target = targets.get(request.bucket);
     const result = calculateAssetScore(input, {
-      currentWeightBps: portfolio.summary.byBucket[request.bucket].weightBps,
+      currentWeightBps: latestAsOfByBucket.get(request.bucket) === request.asOf
+        ? portfolio.summary.byBucket[request.bucket].weightBps
+        : undefined,
       positionLimitBps: target?.maxBps,
       previousState: chain.previousState,
       candidateHistory: chain.states,

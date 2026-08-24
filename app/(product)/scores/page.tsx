@@ -73,6 +73,7 @@ export default async function ScoresPage() {
                     confidence={score.confidence as keyof typeof CONFIDENCE_LABELS}
                     state={score.recommendationState as RecommendationState}
                     assetBucket={score.assetBucket}
+                    stateNote={transitioning ? "状态切换确认中：候选「" + transitionLabel + "」（连续三个交易日后生效）" : undefined}
                   />
                 </div>
                 <StatusPill tone={score.confidence === "LOW" ? "warn" : "good"}>{CONFIDENCE_LABELS[score.confidence as keyof typeof CONFIDENCE_LABELS]}</StatusPill>

@@ -359,7 +359,19 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
   for (const bucket of ["VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"] as const) { const rows = byBucket.get(bucket) ?? []; const target = bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH" : "EARNINGS_GROWTH"; if (!rows.some((row) => row.metricKey === target && row.provider === AGGREGATE_PROVIDER)) allRows.push(...derivedEarningsGrowth(bucket, rows, fetchedAt)); }
   allRows.push(...deriveEquityRiskPremium("BROAD_EQUITY", byBucket.get("BROAD_EQUITY") ?? [], end, fetchedAt));
   allRows.push(...Array.from(byBucket.values()).flat()); const commit = commitProviderMetricObservations(allRows); const reports: BucketRefreshReport[] = [];
-  for (const proxy of proxies) { const rows = allRows.filter((row) => row.subjectType === "ASSET_BUCKET" && row.subjectId === proxy.bucket); const latestAsOf = rows.reduce<string | null>((latest, row) => !latest || row.asOf > latest ? row.asOf : latest, null); const score = latestAsOf ? await refreshScoresForBuckets([{ bucket: proxy.bucket, asOf: latestAsOf }]) : []; reports.push({ bucket: proxy.bucket, proxy: proxy.label, symbol: proxy.symbol, observationCount: rows.length, latestAsOf, scoreSaved: score[0]?.saved ?? false, warnings }); }
+  for (const proxy of proxies) {
+    const rows = allRows.filter((row) => row.subjectType === "ASSET_BUCKET" && row.subjectId === proxy.bucket);
+    const latestAsOf = rows.reduce<string | null>((latest, row) => !latest || row.asOf > latest ? row.asOf : latest, null);
+    // 全量回填时按历史月度采样日逐日回算快照：这是回测与历史评分的点内时间数据基础；
+    // 增量模式仍只刷新最新日。
+    const requests = fullBackfill
+      ? dates.map((date) => ({ bucket: proxy.bucket as ScorableAssetBucket, asOf: date }))
+      : latestAsOf
+        ? [{ bucket: proxy.bucket, asOf: latestAsOf }]
+        : [];
+    const scores = requests.length > 0 ? await refreshScoresForBuckets(requests) : [];
+    reports.push({ bucket: proxy.bucket, proxy: proxy.label, symbol: proxy.symbol, observationCount: rows.length, latestAsOf, scoreSaved: scores.some((score) => score.saved), warnings });
+  }
   const status = reports.some((report) => report.observationCount > 0) ? (warnings.length ? "DEGRADED" : "READY") : "ERROR"; saveProviderStatus("tushare", status, fetchedAt, warnings, { index_dailybasic: directCapability, index_weight: "READY", daily_basic: "READY", fina_indicator: fullBackfill ? "REQUESTED" : "INCREMENTAL_PENDING", fund_share: "READY", fund_nav: "READY" }); // FRED 状态独立评估（Code Review M13）：不凭环境变量标 READY，也不把 FRED 失败算进 tushare。
   const fredStatus: AutomaticRefreshReport["status"] = !process.env.FRED_API_KEY
     ? "NOT_CONFIGURED"

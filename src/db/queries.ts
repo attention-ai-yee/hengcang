@@ -2,6 +2,7 @@ import { asc, desc, eq } from "drizzle-orm";
 import { getDatabase } from "./client";
 import {
   allocationTargets,
+  backtestResults,
   backtestRuns,
   dataSourceStatus,
   decisionLogs,
@@ -68,6 +69,13 @@ export async function listDecisions() {
     .orderBy(desc(decisionLogs.decidedAt));
 }
 
+export async function listBacktestRunsWithResults() {
+  const db = getDatabase();
+  const runs = await listBacktestRuns();
+  const results = db.select().from(backtestResults).all();
+  const byRun = new Map(results.map((result) => [result.backtestRunId, result]));
+  return runs.map((run) => ({ ...run, result: byRun.get(run.id) ?? null }));
+}
 export async function listBacktestRuns() {
   return getDatabase()
     .select()

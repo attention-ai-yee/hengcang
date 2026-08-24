@@ -9,6 +9,18 @@ import { BUCKET_LABELS, CONFIDENCE_LABELS, STATE_LABELS } from "@/lib/presentati
 import { listLatestScores, listLatestSignals } from "@/db/queries";
 import { getPortfolioView } from "@/server/portfolio-service";
 
+/** 三交易日确认期：候选状态尚未确认时，旧确认状态标签会与当前置信度徽章矛盾（如「高可信度」+「数据可信度低」）。 */
+function readTransition(snapshot: { componentsJson: string; recommendationState: string }): { transitioning: boolean; label: string } {
+  try {
+    const parsed = JSON.parse(snapshot.componentsJson) as { candidateState?: unknown; stateConfirmed?: unknown };
+    const candidateState = typeof parsed.candidateState === "string" ? parsed.candidateState : null;
+    const stateConfirmed = typeof parsed.stateConfirmed === "boolean" ? parsed.stateConfirmed : true;
+    const transitioning = stateConfirmed === false && candidateState !== null && candidateState !== snapshot.recommendationState;
+    return { transitioning, label: transitioning ? (STATE_LABELS[candidateState as keyof typeof STATE_LABELS] ?? candidateState) : "" };
+  } catch {
+    return { transitioning: false, label: "" };
+  }
+}
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
@@ -135,6 +147,7 @@ export default async function DashboardPage() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {(["GOLD", "VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"] as AssetBucket[]).map((bucket) => {
             const score = latestScores.get(bucket);
+            const transition = score ? readTransition(score) : { transitioning: false, label: "" };
             return (
               <Card key={bucket} className="p-5">
                 <div className="flex items-start justify-between">
@@ -148,6 +161,7 @@ export default async function DashboardPage() {
                         trend={score.trendScore}
                         confidence={score.confidence as keyof typeof CONFIDENCE_LABELS}
                         state={score.recommendationState as keyof typeof STATE_LABELS}
+                        stateNote={transition.transitioning ? "状态切换确认中：候选「" + transition.label + "」（连续三个交易日后生效）" : undefined}
                       />
                     ) : <strong className="mt-2 block text-3xl">—</strong>}
                   </div>
@@ -156,7 +170,7 @@ export default async function DashboardPage() {
                   </StatusPill>
                 </div>
                 <p className="mt-5 border-t border-[#e7ece8] pt-4 text-sm font-semibold">
-                  {score ? STATE_LABELS[score.recommendationState as keyof typeof STATE_LABELS] : "尚无可计算评分"}
+                  {score ? (transition.transitioning ? "状态切换确认中：候选「" + transition.label + "」（连续三个交易日后生效）" : STATE_LABELS[score.recommendationState as keyof typeof STATE_LABELS]) : "尚无可计算评分"}
                 </p>
               </Card>
             );

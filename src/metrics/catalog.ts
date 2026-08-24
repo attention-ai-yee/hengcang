@@ -16,6 +16,7 @@ export const METRIC_CATALOG = {
   REAL_YIELD_10Y: { label: "10 年实际利率", defaultUnit: "percent" },
   DOLLAR_INDEX: { label: "美元广义指数", defaultUnit: "index" },
   GOLD_ETF_FLOW_3M: { label: "黄金 ETF 三个月净流入", defaultUnit: "currency" },
+  GOLD_GLOBAL_ETF_FLOW_3M: { label: "全球黄金 ETF 三个月净流入（WGC）", defaultUnit: "currency" },
   DIVIDEND_STABILITY_SCORE: { label: "分红稳定性", defaultUnit: "score", scoreRange: true },
   CENTRAL_BANK_DEMAND_SCORE: { label: "央行购金需求", defaultUnit: "score", scoreRange: true },
   FUNDAMENTAL_OVERRIDE_SCORE: { label: "基本面手工覆盖", defaultUnit: "score", scoreRange: true },

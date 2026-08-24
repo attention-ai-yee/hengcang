@@ -70,9 +70,11 @@ export class ScoreInputBuilder {
         };
       }
       case "GOLD": {
-        const [realYield, dollarIndex, etfFlow, centralBankDemand] = await Promise.all([
-          load("REAL_YIELD_10Y"), load("DOLLAR_INDEX"), load("GOLD_ETF_FLOW_3M"), load("CENTRAL_BANK_DEMAND_SCORE"),
+        const [realYield, dollarIndex, globalFlow, domesticFlow, centralBankDemand] = await Promise.all([
+          load("REAL_YIELD_10Y"), load("DOLLAR_INDEX"), load("GOLD_GLOBAL_ETF_FLOW_3M"), load("GOLD_ETF_FLOW_3M"), load("CENTRAL_BANK_DEMAND_SCORE"),
         ]);
+        // 资金流：优先 WGC 全球口径（VALID）；缺失时回退国内 ETF 代理（PARTIAL）
+        const etfFlow = globalFlow.currentValue !== null ? globalFlow : domesticFlow;
         return {
           bucket, asOf, trend: priceFeatures.trend,
           pricePosition: priceFeatures.pricePosition,

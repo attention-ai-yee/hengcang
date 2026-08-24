@@ -11,6 +11,7 @@ import { cacheIndexWeights, readLatestIndexWeightSnapshot, readLatestIndexWeight
 import { scoreDividendStability } from "@/providers/tushare/dividend-stability";
 import type { TushareDividendRecord } from "@/providers/tushare/index";
 import { calculateGoldEtfFlow3m } from "@/providers/tushare/gold-etf-flow";
+import { fetchWgcGlobalMonthlyFlows } from "@/providers/wgc";
 import { TushareProvider } from "@/providers/tushare";
 import { getGoldEtfProxies, getTushareScoreProxies, type TushareScoreProxy } from "@/providers/tushare/proxies";
 import type { MetricPoint, PricePoint, ProviderResult } from "@/providers/types";
@@ -240,6 +241,13 @@ async function refreshGoldMacro(fred: FredProvider, range: { start: string; end:
   return { rows: results.flat(), fetchedSeriesCount: results.filter((rows) => rows.length > 0).length, total: 2 };
 }
 async function refreshGoldEtfFlow(provider: TushareProvider, range: { start: string; end: string }, warnings: string[]): Promise<ProviderMetricObservationInput[]> {
+  // 主路径：WGC Goldhub 全球月度流量（官方修订口径，VALID）。失败时回退国内 ETF 代理（PARTIAL）。
+  const wgc = await fetchWgcGlobalMonthlyFlows();
+  if (wgc.ok && wgc.data.length >= 36) {
+    return wgc.data.map((point) => ({ subjectType: "ASSET_BUCKET", subjectId: "GOLD", metricKey: "GOLD_GLOBAL_ETF_FLOW_3M", value: String(point.valueMillionUsd), unit: "currency", provider: wgc.provider, observedAt: point.asOf + "T15:00:00+08:00", availableAt: point.availableAt, asOf: point.asOf, fetchedAt: wgc.fetchedAt, quality: "VALID", metadataJson: JSON.stringify({ source: "WGC Goldhub gold ETF flows", unit: "million USD", window: "3-month rolling sum" }) }));
+  }
+  if (!wgc.ok) warnings.push("WGC 全球黄金 ETF 流量不可用（" + wgc.error.message + "），回退国内 ETF 代理");
+  else warnings.push("WGC 序列过短（" + wgc.data.length + " 点），回退国内 ETF 代理");
   const shares = []; const navs = []; let fetchedAt = new Date().toISOString();
   for (const symbol of getGoldEtfProxies()) {
     const [share, nav] = await Promise.all([provider.getFundShare(symbol, range), provider.getFundNavForFlow(symbol, range)]);

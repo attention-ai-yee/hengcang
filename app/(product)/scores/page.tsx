@@ -57,6 +57,10 @@ export default async function ScoresPage() {
           {latestScores.map((score) => {
             const isGold = score.assetBucket === "GOLD";
             const details = parseDetails(score.componentsJson);
+            // 状态机三交易日确认期：旧确认状态可能是 LOW_CONFIDENCE 等历史残留，
+            // 直接展示其标签会与当前置信度徽章矛盾（如「高可信度」+「数据可信度低」）。
+            const transitioning = details.stateConfirmed === false && details.candidateState !== null && details.candidateState !== score.recommendationState;
+            const transitionLabel = transitioning ? (STATE_LABELS[details.candidateState as RecommendationState] ?? details.candidateState) : "";
             return <Card key={score.id} className="p-5">
               <div className="flex items-start justify-between">
                 <div>
@@ -78,7 +82,7 @@ export default async function ScoresPage() {
                 <Metric label={isGold ? "宏观支持度" : "基本面"} value={score.fundamentalScore} />
                                 <Metric label="趋势" value={score.trendScore} />
               </div>
-              <p className="mt-4 text-sm font-semibold">{STATE_LABELS[score.recommendationState as RecommendationState]}</p>
+              <p className="mt-4 text-sm font-semibold">{transitioning ? "状态切换确认中：候选「" + transitionLabel + "」（连续三个交易日后生效）" : STATE_LABELS[score.recommendationState as RecommendationState]}</p>
               <p className="mt-1 text-xs text-[#748078]">as_of {score.asOf}</p>
               <details className="mt-4 border-t border-[#e7ece8] pt-4 text-sm">
                 <summary className="cursor-pointer font-semibold text-[#315f4d]">为什么是这个分数</summary>
@@ -119,14 +123,16 @@ interface DetailComponent {
   coverage: number | null;
 }
 
-function parseDetails(json: string): { note: string; components: DetailComponent[]; reasons: string[] } {
+function parseDetails(json: string): { note: string; components: DetailComponent[]; reasons: string[]; candidateState: string | null; stateConfirmed: boolean } {
   try {
-    const value = JSON.parse(json) as { note?: unknown; components?: unknown; reasons?: unknown };
+    const value = JSON.parse(json) as { note?: unknown; components?: unknown; reasons?: unknown; candidateState?: unknown; stateConfirmed?: unknown };
     const entries = value.components && typeof value.components === "object" && !Array.isArray(value.components)
       ? Object.entries(value.components as Record<string, Record<string, unknown>>)
       : [];
     return {
       note: typeof value.note === "string" ? value.note : "",
+      candidateState: typeof value.candidateState === "string" ? value.candidateState : null,
+      stateConfirmed: typeof value.stateConfirmed === "boolean" ? value.stateConfirmed : true,
       components: entries.map(([key, component]) => ({
         key,
         rawValue: typeof component.rawValue === "number" ? component.rawValue : null,
@@ -141,7 +147,7 @@ function parseDetails(json: string): { note: string; components: DetailComponent
       reasons: Array.isArray(value.reasons) ? value.reasons.filter((item): item is string => typeof item === "string") : [],
     };
   } catch {
-    return { note: "评分明细格式无法解析", components: [], reasons: [] };
+    return { note: "评分明细格式无法解析", components: [], reasons: [], candidateState: null, stateConfirmed: true };
   }
 }
 

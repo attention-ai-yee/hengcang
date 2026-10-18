@@ -87,6 +87,7 @@ function insertMetric(input: {
   value: string;
   unit: string;
   asOf: string;
+  provider?: string;
 }) {
   getDatabase().insert(metricObservations).values({
     id: randomUUID(),
@@ -95,7 +96,7 @@ function insertMetric(input: {
     metricKey: input.metricKey,
     value: input.value,
     unit: input.unit,
-    provider: "tushare",
+    provider: input.provider ?? "tushare",
     observedAt: `${input.asOf}T00:00:00Z`,
     availableAt: `${input.asOf}T00:00:00Z`,
     asOf: input.asOf,
@@ -226,10 +227,17 @@ describe("决策日志纵切", () => {
   });
 
   it("状态变化写入 signals，同一 fingerprint 重复刷新不重复写入", async () => {
-    // 08-20 的极端盈利增长观察值触发基本面熔断（REASSESS_THESIS 即时态）。
+    // v2 体检：单期极端负值不触发（需要「最近两期、相隔约一个季度」都为负）。
     insertMetric({ subjectId: "BROAD_EQUITY", metricKey: "INDEX_EARNINGS_GROWTH", value: "-100", unit: "percent", asOf: "2026-08-20" });
+    const singlePrint = await refreshScoresForBuckets([{ bucket: "BROAD_EQUITY", asOf: "2026-08-23" }]);
+    expect(singlePrint[0].result.fundamentalHealth.status).toBe("HEALTHY");
+    expect(singlePrint[0].result.state).toBe("STRONG_ADD_ALLOWED");
 
+    // 约一个季度前（06-01，汇总口径为主数据源，优先于种子行）也为负 → 体检不通过（REASSESS_THESIS 即时态）。
+    insertMetric({ subjectId: "BROAD_EQUITY", metricKey: "INDEX_EARNINGS_GROWTH", value: "-20", unit: "percent", asOf: "2026-06-01", provider: "tushare-index-aggregate" });
     const first = await refreshScoresForBuckets([{ bucket: "BROAD_EQUITY", asOf: "2026-08-23" }]);
+    expect(first[0].result.fundamentalHealth.status).toBe("DETERIORATING");
+    expect(first[0].result.reasons[0]).toContain("指数盈利同比");
     expect(first[0].result.state).toBe("REASSESS_THESIS");
     expect(first[0].result.riskSeverity).toBe("WARNING");
 

@@ -6,7 +6,7 @@ import { planRecommendationSignal } from "@/server/scoring-refresh-service";
 /**
  * 回归测试：单股 8% / 主题 ETF 15% / 主题 20% 硬上限接入评分状态机。
  * - 硬上限违规 → OVERWEIGHT + immediate（无候选确认期）+ allowAdd=false；
- * - 优先级：REASSESS_THESIS（基本面熔断）> OVERWEIGHT（硬上限/桶超配）> LOW_CONFIDENCE；
+ * - 优先级：REASSESS_THESIS（基本面体检不通过）> OVERWEIGHT（硬上限/桶超配）> LOW_CONFIDENCE；
  * - riskSeverity：硬上限 CRITICAL / 重估与桶超配 WARNING / 低可信度 WATCH / 其余 INFO；
  * - 信号计划：状态变化或 CRITICAL 才生成，fingerprint 含桶|旧状态|新状态|评估日。
  */
@@ -50,12 +50,26 @@ const missingTrend: AssetModelInput["trend"] = {
   momentum6m: { currentValue: null, history: [], source: "UNAVAILABLE", asOf: EVAL_DATE },
 };
 
+/**
+ * PE 现值处在自身历史的中位（9 与 11 之间）：v2 机会分（70% 便宜程度 + 30% 趋势）
+ * 落在小幅增配区间（70.25）。只有一个历史点时现值的分位恒为 100%（最贵），机会分到不了 60。
+ */
+function midPercentile(value: number, low: number, high: number): MetricSeries {
+  return {
+    ...metric(value),
+    history: [
+      { value: low, asOf: "2019-01-01", availableAt: "2019-01-01T00:00:00Z", quality: "VALID" },
+      { value: high, asOf: "2020-01-01", availableAt: "2020-01-01T00:00:00Z", quality: "VALID" },
+    ],
+  };
+}
+
 function inputWithTrend(trend: ValueDividendInput["trend"]): ValueDividendInput {
   return {
     bucket: "VALUE_DIVIDEND",
     asOf: EVAL_DATE,
     trend,
-    pe: metric(10),
+    pe: midPercentile(10, 9, 11),
     pb: metric(1),
     dividendYield: metric(5),
     earningsGrowth: metric(8),

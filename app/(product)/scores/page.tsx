@@ -3,8 +3,14 @@ import { ManualScoreForm } from "@/components/manual-score-form";
 import { AutomaticDataRefresh } from "@/components/automatic-data-refresh";
 import { ScoreColorLegend, ScoreExplanationTooltip } from "@/components/score-explanation-tooltip";
 import { listLatestScores } from "@/db/queries";
+import { DEFAULT_SCORING_CONFIG } from "@/domain/scoring";
 import type { AssetBucket, RecommendationState } from "@/domain/types";
-import { BUCKET_LABELS, CONFIDENCE_LABELS, STATE_LABELS } from "@/lib/presentation";
+import { BUCKET_LABELS, CONFIDENCE_LABELS, FUNDAMENTAL_HEALTH_LABELS, HEALTH_CHECK_STATUS_LABELS, STATE_LABELS } from "@/lib/presentation";
+import { readFundamentalHealth } from "@/lib/score-details";
+
+const CHEAP_PCT = Math.round(DEFAULT_SCORING_CONFIG.scoreWeights.cheapness * 100);
+const TREND_PCT = Math.round(DEFAULT_SCORING_CONFIG.scoreWeights.trend * 100);
+const HEALTH = DEFAULT_SCORING_CONFIG.healthCheck;
 
 export const dynamic = "force-dynamic";
 
@@ -26,19 +32,19 @@ export default async function ScoresPage() {
       <Card className="mb-5 p-5">
         <h2 className="text-lg font-semibold">评分如何计算</h2>
           <div className="mt-4 grid gap-3 text-sm leading-6 md:grid-cols-3">
-            <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>1. 指标归一化</strong><p className="mt-1 text-[#66736d]">只使用当时已经发布的数据计算滚动历史百分位。便宜程度、基本面和趋势均为越高越有吸引力。</p></div>
-          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>2. 合成三项分</strong><p className="mt-1 text-[#66736d]">按资产桶权重加权；覆盖率低于 60% 为低可信度，60%–80% 为中等。代理数据最高只到中等可信度。</p></div>
-          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>3. 计算配置吸引力分</strong><p className="mt-1 text-[#66736d]">50% × 便宜程度 + 30% × 基本面 + 20% × 趋势。高分表示配置吸引力更强，不代表保证上涨。</p></div>
+            <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>1. 便宜程度与趋势</strong><p className="mt-1 text-[#66736d]">只使用当时已经发布的数据计算滚动历史百分位，越高越有吸引力；覆盖率低于 60% 为低可信度，60%–80% 为中等，代理数据最高只到中等。</p></div>
+          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>2. 基本面体检</strong><p className="mt-1 text-[#66736d]">不打分，只判断是否在恶化：盈利同比最近两期（相隔约一个季度）都为负；科技桶营收同比两期为负；红利桶分红稳定性低于 {HEALTH.dividendStabilityFloor}。恶化 → 暂停新增、重新评估；数据不足 → 最多小幅增配。</p></div>
+          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>3. 计算配置吸引力分</strong><p className="mt-1 text-[#66736d]">{CHEAP_PCT}% × 便宜程度 + {TREND_PCT}% × 趋势。高分表示配置吸引力更强，不代表保证上涨。</p></div>
         </div>
         <ScoreColorLegend />
-        <p className="mt-3 text-xs leading-5 text-[#748078]">权益资产基本面低于 35 时立即暂停新增并要求重新评估逻辑；黄金宏观支持度偏低时仅停止新增、继续观察宏观方向。超配与低可信度会覆盖普通分数区间。现金与债券不计算配置吸引力分。</p>
+        <p className="mt-3 text-xs leading-5 text-[#748078]">权益资产基本面体检不通过时立即暂停新增并要求重新评估逻辑；黄金的宏观支持度（实际利率、美元、资金流）只作参考，不再拦路。超配与低可信度会覆盖普通分数区间。现金与债券、海外权益只按战略仓位管理，不计算配置吸引力分。</p>
         <details className="mt-4 rounded-xl border border-[#dce3de] p-4 text-sm">
           <summary className="cursor-pointer font-semibold">查看四类资产的默认指标</summary>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <ModelSummary title="黄金" text="价格吸引力：5 年价格位置、MA200 偏离、3M 拥挤；宏观支持度：实际利率水平与 3M 变化、美元指数水平与 3M 变化、全球黄金 ETF 资金流（WGC 月度，15%）、央行购金需求（15%）。宏观支持度低只代表逆风，不代表长期配置逻辑失效。" />
-            <ModelSummary title="红利与价值" text="便宜程度：PE 35%、PB 25%、股息率 40%；基本面：盈利增长 40%、ROE 30%、分红稳定性 30%。" />
-            <ModelSummary title="科技与成长" text="便宜程度（v1.4，已实现基本面模型）：PE_TTM 45%、PS 25%、PEG_TTM 30%（PE 与实际盈利增长的确定性比值）；基本面：已实现盈利增长 55%、营收增长 45%。不再使用前瞻预测数据。" />
-            <ModelSummary title="宽基权益" text="便宜程度：PE 60%、PB 40%（股权风险溢价为低可信派生代理，不进入主评分）；基本面：指数盈利增长。" />
+            <ModelSummary title="黄金" text="价格吸引力：5 年价格位置、MA200 偏离、3M 拥挤。宏观支持度（实际利率、美元、全球黄金 ETF 资金流、央行购金）只作参考展示：2022 年后它和金价明显脱钩，v2 起不再拦路。" />
+            <ModelSummary title="红利与价值" text="便宜程度：PE 35%、PB 25%、股息率 40%。基本面体检：盈利同比两期为负，或分红稳定性低于 60（基金拿不到成分财报时可用手工判断）。" />
+            <ModelSummary title="科技与成长" text="便宜程度（已实现基本面模型）：PE_TTM 45%、PS 25%、PEG_TTM 30%。基本面体检：盈利同比或营收同比两期为负。" />
+            <ModelSummary title="宽基权益" text="便宜程度：PE 60%、PB 40%（股权风险溢价为低可信派生代理，不进入主评分）。基本面体检：指数盈利同比两期为负。" />
           </div>
         </details>
       </Card>
@@ -57,6 +63,8 @@ export default async function ScoresPage() {
           {latestScores.map((score) => {
             const isGold = score.assetBucket === "GOLD";
             const details = parseDetails(score.componentsJson);
+            const health = readFundamentalHealth(score.componentsJson);
+            const healthLabel = health.status ? FUNDAMENTAL_HEALTH_LABELS[health.status] : undefined;
             // 状态机三交易日确认期：旧确认状态可能是 LOW_CONFIDENCE 等历史残留，
             // 直接展示其标签会与当前置信度徽章矛盾（如「高可信度」+「数据可信度低」）。
             const transitioning = details.stateConfirmed === false && details.candidateState !== null && details.candidateState !== score.recommendationState;
@@ -73,6 +81,7 @@ export default async function ScoresPage() {
                     confidence={score.confidence as keyof typeof CONFIDENCE_LABELS}
                     state={score.recommendationState as RecommendationState}
                     assetBucket={score.assetBucket}
+                    healthLabel={healthLabel}
                     stateNote={transitioning ? "状态切换确认中：候选「" + transitionLabel + "」（连续三个交易日后生效）" : undefined}
                   />
                 </div>
@@ -80,7 +89,9 @@ export default async function ScoresPage() {
               </div>
               <div className="mt-5 grid grid-cols-3 gap-3 text-center text-sm">
                 <Metric label={isGold ? "价格吸引力" : "便宜程度"} value={score.cheapnessScore} />
-                <Metric label={isGold ? "宏观支持度" : "基本面"} value={score.fundamentalScore} />
+                {isGold
+                  ? <Metric label="宏观支持度（参考）" value={score.fundamentalScore} />
+                  : <TextMetric label="基本面体检" value={healthLabel ?? "旧版快照"} tone={health.status === "DETERIORATING" ? "danger" : health.status === "UNKNOWN" ? "warn" : "neutral"} />}
                                 <Metric label="趋势" value={score.trendScore} />
               </div>
               <p className="mt-4 text-sm font-semibold">{transitioning ? "状态切换确认中：候选「" + transitionLabel + "」（连续三个交易日后生效）" : STATE_LABELS[score.recommendationState as RecommendationState]}</p>
@@ -94,6 +105,15 @@ export default async function ScoresPage() {
                     <tbody>{details.components.map((component) => <tr key={component.key}><td>{component.key}</td><td>{showValue(component.rawValue)}</td><td>{showValue(component.percentile, "%")}</td><td>{showValue(component.score)}</td><td>{(component.weight * 100).toFixed(0)}%</td><td>{providerLabel(component.source)} · <Quality quality={component.quality} /></td><td>{component.asOf}{component.coverage === null ? "" : ` · ${(component.coverage * 100).toFixed(0)}%`}</td></tr>)}</tbody>
                   </table>
                 </div>
+                {health.checks.length > 0 && (
+                  <div className="mt-4 overflow-x-auto">
+                    <p className="mb-2 font-semibold text-[#27342e]">基本面体检明细</p>
+                    <table className="data-table min-w-[560px]">
+                      <thead><tr><th>检查项</th><th>触发条件</th><th>结果</th><th>最新</th><th>约一个季度前</th><th>说明</th></tr></thead>
+                      <tbody>{health.checks.map((check) => <tr key={check.key}><td>{check.label}</td><td>{check.rule}</td><td>{HEALTH_CHECK_STATUS_LABELS[check.status] ?? check.status}</td><td>{check.latest ? `${check.latest.value} @ ${check.latest.asOf}` : "—"}</td><td>{check.previous ? `${check.previous.value} @ ${check.previous.asOf}` : "—"}</td><td>{check.note ?? ""}</td></tr>)}</tbody>
+                    </table>
+                  </div>
+                )}
                 {details.reasons.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-[#72572e]">{details.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
               </details>
             </Card>;
@@ -106,6 +126,11 @@ export default async function ScoresPage() {
 
 function Metric({ label, value }: { label: string; value: number | null }) {
   return <div className="rounded-xl bg-[#f2f5f2] p-3"><span className="block text-xs text-[#6f7c75]">{label}</span><strong className="mt-1 block text-lg">{value ?? "—"}</strong></div>;
+}
+
+function TextMetric({ label, value, tone }: { label: string; value: string; tone: "neutral" | "warn" | "danger" }) {
+  const color = tone === "danger" ? "text-[#b4453d]" : tone === "warn" ? "text-[#a66b10]" : "text-[#17201c]";
+  return <div className="rounded-xl bg-[#f2f5f2] p-3"><span className="block text-xs text-[#6f7c75]">{label}</span><strong className={`mt-1 block text-lg ${color}`}>{value}</strong></div>;
 }
 
 function ModelSummary({ title, text }: { title: string; text: string }) {

@@ -14,6 +14,8 @@ interface ScoreExplanationTooltipProps {
   state: RecommendationState;
   /** 三交易日确认期等场景可覆盖状态文案（避免与置信度徽章矛盾） */
   stateNote?: string;
+  /** 基本面体检结论文案（v2）；旧版快照没有体检时不传 */
+  healthLabel?: string;
 }
 
 function scoreBand(score: number) {
@@ -45,11 +47,14 @@ export function ScoreExplanationTooltip({
   confidence,
   state,
   stateNote,
+  healthLabel,
 }: ScoreExplanationTooltipProps) {
-  // 黄金 v1.2（规格 §2/§24/§25）：支柱展示语义不同，且禁止对黄金使用「重新评估投资逻辑」类文案。
+  // 黄金：支柱展示语义不同，且禁止对黄金使用「重新评估投资逻辑」类文案；宏观支持度 v2 起只作参考。
   const isGold = assetBucket === "GOLD";
   const cheapLabel = isGold ? "价格吸引力" : "便宜程度";
-  const fundamentalLabel = isGold ? "宏观支持度" : "基本面";
+  const weights = DEFAULT_SCORING_CONFIG.scoreWeights;
+  const cheapPct = Math.round(weights.cheapness * 100);
+  const trendPct = Math.round(weights.trend * 100);
   const summary = score === null
     ? "当前缺少足够数据，无法计算配置吸引力分。"
     : `${score.toFixed(1)} 分属于${scoreBand(score)}。当前状态：${stateNote ?? STATE_LABELS[state]}。`;
@@ -61,7 +66,7 @@ export function ScoreExplanationTooltip({
         <strong className={cn("text-4xl", scoreColor(state))}>{score ?? "—"}</strong>
         <button
           type="button"
-          aria-label={summary + " 配置吸引力分由" + cheapLabel + " 50%、" + fundamentalLabel + " 30% 和趋势 20% 合成。"}
+          aria-label={summary + " 配置吸引力分由" + cheapLabel + " " + cheapPct + "% 和趋势 " + trendPct + "% 合成。"}
           className="grid size-6 place-items-center rounded-full border border-[#cbd7d0] bg-[#f5f8f6] text-[#557064] outline-none transition hover:border-[#315f4d] hover:text-[#315f4d] focus-visible:ring-2 focus-visible:ring-[#6f9b88]"
         >
           <CircleHelp size={15} aria-hidden="true" />
@@ -72,15 +77,19 @@ export function ScoreExplanationTooltip({
         >
           <strong className="block text-sm">{summary}</strong>
           <p className="mt-2 text-xs leading-5 text-[#d4e3dc]">
-            计算：50% × {cheapLabel} {value(cheapness)} + 30% × {fundamentalLabel} {value(fundamental)} + 20% × 趋势 {value(trend)}。
+            计算：{cheapPct}% × {cheapLabel} {value(cheapness)} + {trendPct}% × 趋势 {value(trend)}。
           </p>
           <div className="mt-2 text-xs leading-5 text-[#d4e3dc]">
-            {isGold && (
+            {isGold ? (
               <p className="mt-2 text-xs leading-5 text-[#d4e3dc]">
-                价格吸引力：衡量黄金当前价格位置和拥挤程度。宏观支持度：衡量实际利率、美元、ETF 资金流和央行需求的支持程度——低分代表宏观逆风，不表示黄金长期配置逻辑失效。趋势：衡量中长期价格趋势和动量状态。
+                价格吸引力：衡量黄金当前价格位置和拥挤程度。趋势：衡量中长期价格趋势和动量状态。宏观支持度 {value(fundamental)}（实际利率、美元、ETF 资金流、央行需求）只作参考：2022 年后它和金价明显脱钩，v2 起不再拦路。
               </p>
-            )}
-            可信度：{CONFIDENCE_LABELS[confidence]}。高分表示更值得考虑配置，但仍受仓位、基本面熔断和数据可信度约束；它不是交易指令。
+            ) : healthLabel ? (
+              <p className="mt-2 text-xs leading-5 text-[#d4e3dc]">
+                基本面体检：{healthLabel}。体检不通过时暂停新增并重新评估逻辑；数据不足时最多小幅增配。
+              </p>
+            ) : null}
+            可信度：{CONFIDENCE_LABELS[confidence]}。高分表示更值得考虑配置，但仍受仓位、基本面体检和数据可信度约束；它不是交易指令。
           </div>
         </div>
       </div>

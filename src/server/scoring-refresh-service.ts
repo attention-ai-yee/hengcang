@@ -249,6 +249,7 @@ export async function refreshScoresForBuckets(
           signalSuppressed: result.signalSuppressed,
           hardLimitExceeded: result.hardLimitExceeded,
           hardLimitLabel: result.hardLimitLabel,
+          fundamentalHealth: result.fundamentalHealth,
           components: result.components,
           missingMetrics: result.missingMetrics,
           reasons: result.reasons,

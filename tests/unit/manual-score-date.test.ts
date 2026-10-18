@@ -11,7 +11,7 @@ function payloadWith(asOf: string) {
   return {
     assetBucket: "GOLD" as const,
     cheapnessScore: 60,
-    fundamentalScore: 50,
+    fundamentalHealth: "HEALTHY" as const,
     trendScore: 40,
     asOf,
   };

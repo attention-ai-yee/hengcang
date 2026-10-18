@@ -75,7 +75,7 @@ describe("候选链与手工评分（H5）", () => {
     const record = await saveManualScore({
       assetBucket: "GOLD",
       cheapnessScore: 80,
-      fundamentalScore: 60,
+      fundamentalHealth: "HEALTHY",
       trendScore: 50,
       asOf: "2026-08-22",
     });

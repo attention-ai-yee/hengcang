@@ -16,7 +16,7 @@ describe("v1.1 Confidence", () => {
   });
 
   it("中等可信度限制强增配和降低仓位", () => {
-    expect(applyRiskRules({ opportunityScore: 80, fundamentalScore: 60, confidence: "MEDIUM" }).state).toBe("LIGHT_ADD_ALLOWED");
-    expect(applyRiskRules({ opportunityScore: 10, fundamentalScore: 60, confidence: "MEDIUM" }).state).toBe("DO_NOT_ADD");
+    expect(applyRiskRules({ opportunityScore: 80, fundamentalHealth: "HEALTHY", confidence: "MEDIUM" }).state).toBe("LIGHT_ADD_ALLOWED");
+    expect(applyRiskRules({ opportunityScore: 10, fundamentalHealth: "HEALTHY", confidence: "MEDIUM" }).state).toBe("DO_NOT_ADD");
   });
 });

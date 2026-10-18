@@ -22,15 +22,17 @@ export async function saveManualScore(payload: ManualScorePayload) {
   const actualBps = view.summary.byBucket[payload.assetBucket as AssetBucket].weightBps;
   const isOverweight = target ? actualBps > target.maxBps : false;
   const confidence = "LOW" as const;
-  const opportunityScore = calculateOpportunityScore(
-    payload.cheapnessScore,
-    payload.fundamentalScore,
-    payload.trendScore,
-  );
+  const opportunityScore = calculateOpportunityScore(payload.cheapnessScore, payload.trendScore);
+  const healthReasons = payload.fundamentalHealth === "DETERIORATING"
+    ? ["基本面体检：手工判断为恶化"]
+    : payload.fundamentalHealth === "UNKNOWN"
+      ? ["基本面体检：手工判断为数据不足，最多输出小幅增配"]
+      : [];
   const rules = applyRiskRules({
     bucket: payload.assetBucket as ScorableAssetBucket,
     opportunityScore,
-    fundamentalScore: payload.fundamentalScore,
+    fundamentalHealth: payload.assetBucket === "GOLD" ? "NOT_APPLICABLE" : payload.fundamentalHealth,
+    healthReasons,
     confidence,
     currentWeightBps: actualBps,
     positionLimitBps: target?.maxBps,
@@ -56,7 +58,7 @@ export async function saveManualScore(payload: ManualScorePayload) {
     asOf: payload.asOf,
     valuationScore: null,
     cheapnessScore: payload.cheapnessScore,
-    fundamentalScore: payload.fundamentalScore,
+    fundamentalScore: null,
     trendScore: payload.trendScore,
     opportunityScore,
     riskPenalty: 0,
@@ -71,10 +73,14 @@ export async function saveManualScore(payload: ManualScorePayload) {
       note: "用户手工录入的已归一化代理分，未使用原始指标历史序列",
       candidateState: rules.state,
       stateConfirmed: confirmation.confirmed,
+      fundamentalHealth: {
+        status: payload.assetBucket === "GOLD" ? "NOT_APPLICABLE" : payload.fundamentalHealth,
+        checks: [],
+        reasons: healthReasons,
+      },
       components: {
-        cheapness: { rawValue: payload.cheapnessScore, percentile: null, score: payload.cheapnessScore, weight: 0.5, source: "MANUAL", asOf: payload.asOf },
-        fundamental: { rawValue: payload.fundamentalScore, percentile: null, score: payload.fundamentalScore, weight: 0.3, source: "MANUAL", asOf: payload.asOf },
-        trend: { rawValue: payload.trendScore, percentile: null, score: payload.trendScore, weight: 0.2, source: "MANUAL", asOf: payload.asOf },
+        cheapness: { rawValue: payload.cheapnessScore, percentile: null, score: payload.cheapnessScore, weight: DEFAULT_SCORING_CONFIG.scoreWeights.cheapness, source: "MANUAL", asOf: payload.asOf },
+        trend: { rawValue: payload.trendScore, percentile: null, score: payload.trendScore, weight: DEFAULT_SCORING_CONFIG.scoreWeights.trend, source: "MANUAL", asOf: payload.asOf },
       },
       reasons: [
         ...rules.reasons,

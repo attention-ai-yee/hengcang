@@ -6,7 +6,6 @@ import { shanghaiDate } from "@/lib/shanghai";
 
 const SCORE_FIELDS = [
   { name: "cheapnessScore", label: "便宜程度分", hint: "越高越便宜" },
-  { name: "fundamentalScore", label: "基本面分", hint: "越高越健康" },
   { name: "trendScore", label: "趋势分", hint: "越高越强" },
 ] as const;
 
@@ -22,12 +21,12 @@ export function ManualScoreForm() {
       body: JSON.stringify({
         assetBucket: formData.get("assetBucket"),
         cheapnessScore: Number(formData.get("cheapnessScore")),
-        fundamentalScore: Number(formData.get("fundamentalScore")),
+        fundamentalHealth: formData.get("fundamentalHealth"),
         trendScore: Number(formData.get("trendScore")),
         asOf: shanghaiDate(), // M14: 上海时区今天
       }),
     });
-    setStatus(response.ok ? "已生成低可信度评分快照" : "计算失败，请检查 0–100 的输入范围");
+    setStatus(response.ok ? "已生成低可信度评分快照" : "计算失败，请检查 0–100 的输入范围与基本面体检选项");
     if (response.ok) router.refresh();
   }
 
@@ -40,6 +39,14 @@ export function ManualScoreForm() {
           <option value="VALUE_DIVIDEND">红利与价值</option>
           <option value="TECH_GROWTH">科技与成长</option>
           <option value="BROAD_EQUITY">宽基权益</option>
+        </select>
+      </label>
+      <label className="grid gap-1.5 text-sm">
+        基本面体检<span className="text-xs text-[#748078]">黄金不适用，可忽略</span>
+        <select name="fundamentalHealth" defaultValue="HEALTHY" className="rounded-xl border border-[#cfd8d2] bg-white px-3 py-2.5">
+          <option value="HEALTHY">正常：没有恶化迹象</option>
+          <option value="DETERIORATING">恶化：暂停新增、重新评估</option>
+          <option value="UNKNOWN">数据不足：最多小幅增配</option>
         </select>
       </label>
       {SCORE_FIELDS.map((field) => (

@@ -1,17 +1,20 @@
 {
-  "version": 5,
+  "version": 6,
   "scoreWeights": {
-    "cheapness": 0.5,
-    "fundamental": 0.3,
-    "trend": 0.2
+    "cheapness": 0.7,
+    "trend": 0.3
   },
   "thresholds": {
     "strongAdd": 75,
     "lightAdd": 60,
     "hold": 40,
     "doNotAdd": 25,
-    "fundamentalCircuitBreaker": 35,
-    "goldMacroHeadwind": 35
+    "fundamentalCircuitBreaker": 35
+  },
+  "healthCheck": {
+    "previousReportMinDays": 80,
+    "previousReportMaxDays": 200,
+    "dividendStabilityFloor": 60
   },
   "positionLimits": {
     "singleStock": 0.08,

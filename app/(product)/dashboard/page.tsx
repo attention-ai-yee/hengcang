@@ -5,7 +5,8 @@ import { Card, PageIntro, StatusPill } from "@/components/ui";
 import { ScoreExplanationTooltip } from "@/components/score-explanation-tooltip";
 import { formatBps, formatMoneyMinor } from "@/domain/portfolio";
 import { ASSET_BUCKETS, type AssetBucket } from "@/domain/types";
-import { BUCKET_LABELS, CONFIDENCE_LABELS, STATE_LABELS } from "@/lib/presentation";
+import { BUCKET_LABELS, CONFIDENCE_LABELS, FUNDAMENTAL_HEALTH_LABELS, STATE_LABELS } from "@/lib/presentation";
+import { readFundamentalHealth } from "@/lib/score-details";
 import { listLatestScores, listLatestSignals } from "@/db/queries";
 import { getPortfolioView } from "@/server/portfolio-service";
 
@@ -159,6 +160,8 @@ export default async function DashboardPage() {
                         cheapness={score.cheapnessScore}
                         fundamental={score.fundamentalScore}
                         trend={score.trendScore}
+                        assetBucket={bucket}
+                        healthLabel={(() => { const status = readFundamentalHealth(score.componentsJson).status; return status ? FUNDAMENTAL_HEALTH_LABELS[status] : undefined; })()}
                         confidence={score.confidence as keyof typeof CONFIDENCE_LABELS}
                         state={score.recommendationState as keyof typeof STATE_LABELS}
                         stateNote={transition.transitioning ? "状态切换确认中：候选「" + transition.label + "」（连续三个交易日后生效）" : undefined}

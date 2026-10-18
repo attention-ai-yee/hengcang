@@ -1,5 +1,6 @@
 import type { Confidence, RecommendationState, RiskSeverity, ScorableAssetBucket } from "../types";
 import { DEFAULT_SCORING_CONFIG, assertScoringConfig, type ScoringConfig } from "./config";
+import { assessFundamentalHealth, type FundamentalHealthStatus } from "./health-check";
 import { combineComponents, calculateModelSubscores } from "./models";
 import { clampScore, round1 } from "./percentile";
 import { confirmStateTransition, getBaseState, shouldSuppressRecommendation } from "./state";
@@ -10,27 +11,23 @@ function worseConfidence(first: Confidence, second: Confidence): Confidence {
   return rank[first] <= rank[second] ? first : second;
 }
 
+/** v6：配置吸引力分 = 便宜程度 × 70% + 趋势 × 30%（基本面改为体检，不再加权）。 */
 export function calculateOpportunityScore(
   cheapness: number,
-  fundamental: number,
   trend: number,
   config: ScoringConfig = DEFAULT_SCORING_CONFIG,
 ): number {
   assertScoringConfig(config);
-  return round1(
-    clampScore(
-      cheapness * config.scoreWeights.cheapness +
-        fundamental * config.scoreWeights.fundamental +
-        trend * config.scoreWeights.trend,
-    ),
-  );
+  return round1(clampScore(cheapness * config.scoreWeights.cheapness + trend * config.scoreWeights.trend));
 }
 
 export function applyRiskRules(input: {
   bucket?: ScorableAssetBucket;
   opportunityScore: number | null;
-  fundamentalScore: number | null;
-  fundamentalCoverage?: number;
+  /** 基本面体检结果（v6）；缺省按「数据不足」处理 */
+  fundamentalHealth?: FundamentalHealthStatus;
+  /** 体检给出的具体原因（哪条规则、哪两期数值），写进状态原因 */
+  healthReasons?: string[];
   confidence: Confidence;
   currentWeightBps?: number;
   positionLimitBps?: number;
@@ -40,17 +37,12 @@ export function applyRiskRules(input: {
 }): { state: RecommendationState; allowAdd: boolean; forceSell: false; reasons: string[]; immediate: boolean } {
   const config = input.config ?? DEFAULT_SCORING_CONFIG;
   const reasons: string[] = [];
+  const health = input.fundamentalHealth ?? "UNKNOWN";
 
-  const fundamentalCoverage = input.fundamentalCoverage ?? 1;
-  if (
-    // 黄金 v1.2：宏观支柱衡量的是环境支持度而非经营基本面，
-    // 不触发「重新评估投资逻辑」（规格 §3）；黄金走独立的宏观逆风闸门（见下方）。
-    input.bucket !== "GOLD" &&
-    input.fundamentalScore !== null &&
-    fundamentalCoverage >= config.history.mediumCoverage &&
-    input.fundamentalScore < config.thresholds.fundamentalCircuitBreaker
-  ) {
-    reasons.push(`基本面分低于 ${config.thresholds.fundamentalCircuitBreaker}，暂停新增并重新评估投资逻辑`);
+  // 体检不通过（如盈利连续两期同比为负）→ 暂停新增、重新评估投资逻辑，即时生效。
+  // 黄金没有经营基本面（NOT_APPLICABLE），宏观支持度只展示、不拦路。
+  if (input.bucket !== "GOLD" && health === "DETERIORATING") {
+    reasons.push(...(input.healthReasons ?? []), "基本面体检不通过：暂停新增并重新评估投资逻辑");
     return { state: "REASSESS_THESIS", allowAdd: false, forceSell: false, reasons, immediate: true };
   }
   // 硬上限违规（组合层面的单股/主题约束）与桶超配同为 OVERWEIGHT 即时态：
@@ -70,26 +62,9 @@ export function applyRiskRules(input: {
     if (bucketOverweight) reasons.push("当前仓位严格超过适用上限：停止新增，不强制卖出");
     return { state: "OVERWEIGHT", allowAdd: false, forceSell: false, reasons, immediate: true };
   }
-  if (input.opportunityScore === null || input.fundamentalScore === null || input.confidence === "LOW") {
+  if (input.opportunityScore === null || input.confidence === "LOW") {
     reasons.push("数据可信度不足，禁止输出增配状态");
     return { state: "LOW_CONFIDENCE", allowAdd: false, forceSell: false, reasons, immediate: true };
-  }
-
-  // 黄金宏观逆风闸门（v1.2 规格 §4）：只停止新增，不否定投资逻辑，不立即生效，
-  // 让位于 OVERWEIGHT / LOW_CONFIDENCE（规格 §5）。
-  if (
-    input.bucket === "GOLD" &&
-    fundamentalCoverage >= config.history.mediumCoverage &&
-    input.fundamentalScore !== null &&
-    input.fundamentalScore < config.thresholds.goldMacroHeadwind
-  ) {
-    return {
-      state: "DO_NOT_ADD",
-      allowAdd: false,
-      forceSell: false,
-      immediate: false,
-      reasons: ["黄金宏观支持度偏低，当前实际利率、美元或资金流环境对增配不利；停止新增，继续观察宏观方向。"],
-    };
   }
 
   let state = getBaseState(input.opportunityScore, config);
@@ -97,6 +72,11 @@ export function applyRiskRules(input: {
     if (state === "STRONG_ADD_ALLOWED") state = "LIGHT_ADD_ALLOWED";
     if (state === "REDUCE_CONSIDER") state = "DO_NOT_ADD";
     reasons.push("数据可信度为中等：不输出强增配或降低仓位状态");
+  }
+  // 体检数据不足（财报缺失或过期）：无法确认没有恶化，最多输出小幅增配。
+  if (input.bucket !== "GOLD" && health === "UNKNOWN") {
+    if (state === "STRONG_ADD_ALLOWED") state = "LIGHT_ADD_ALLOWED";
+    reasons.push(...(input.healthReasons?.length ? input.healthReasons : ["基本面体检数据不足：最多输出小幅增配"]));
   }
   return {
     state,
@@ -126,9 +106,10 @@ export function calculateAssetScore(
 ): ScoreResult {
   assertScoringConfig(config);
   const subscores = calculateModelSubscores(input);
+  // v6：基本面子分（历史分位）只作展示参考；决策只看体检结果。
+  const health = assessFundamentalHealth(input, config);
   const opportunity = combineComponents({
     cheapness: subscoreComponent("cheapness", subscores.cheapness, config.scoreWeights.cheapness, input.asOf),
-    fundamental: subscoreComponent("fundamental", subscores.fundamental, config.scoreWeights.fundamental, input.asOf),
     trend: subscoreComponent("trend", subscores.trend, config.scoreWeights.trend, input.asOf),
   });
   const confidence = risk.confidenceOverride
@@ -138,8 +119,8 @@ export function calculateAssetScore(
     // 必须传入 bucket：否则黄金会因 undefined !== "GOLD" 误入通用基本面熔断
     bucket: input.bucket,
     opportunityScore: opportunity.score,
-    fundamentalScore: subscores.fundamental.score,
-    fundamentalCoverage: subscores.fundamental.coverage,
+    fundamentalHealth: health.status,
+    healthReasons: health.reasons,
     confidence,
     currentWeightBps: risk.currentWeightBps,
     positionLimitBps: risk.positionLimitBps,
@@ -149,19 +130,19 @@ export function calculateAssetScore(
   });
 
   /**
-   * 支柱级完整性闸门：重权只允许发生在指标级。整根支柱（便宜程度/基本面/趋势）
-   * 缺失时，机会分被静默重加权且置信度可能仍是 HIGH——此时禁止输出任何增配状态，
-   * 按 LOW_CONFIDENCE 处理（基本面熔断与超配两类更严重的即时态保持优先）。
+   * 支柱级完整性闸门：重权只允许发生在指标级。整根支柱（便宜程度/趋势）缺失时，
+   * 机会分被静默重加权且置信度可能仍是 HIGH——此时禁止输出任何增配状态，
+   * 按 LOW_CONFIDENCE 处理（体检不通过与超配两类更严重的即时态保持优先）。
+   * v6 起基本面不再是机会分的支柱，缺失时由体检的 UNKNOWN 封顶处理。
    */
-  const pillarMissing =
-    subscores.cheapness.score === null || subscores.fundamental.score === null || subscores.trend.score === null;
+  const pillarMissing = subscores.cheapness.score === null || subscores.trend.score === null;
   const gated =
     pillarMissing && rules.state !== "REASSESS_THESIS" && rules.state !== "OVERWEIGHT"
       ? {
           state: "LOW_CONFIDENCE" as RecommendationState,
           allowAdd: false,
           forceSell: false as const,
-          reasons: [...rules.reasons, "缺少整根评分支柱（便宜程度/基本面/趋势之一），禁止输出增配状态"],
+          reasons: [...rules.reasons, "缺少整根评分支柱（便宜程度或趋势），禁止输出增配状态"],
           immediate: true,
         }
       : rules;
@@ -208,6 +189,7 @@ export function calculateAssetScore(
     asOf: input.asOf,
     cheapnessScore: subscores.cheapness.score,
     fundamentalScore: subscores.fundamental.score,
+    fundamentalHealth: health,
     trendScore: subscores.trend.score,
     opportunityScore: opportunity.score,
     confidence: pillarMissing ? worseConfidence(confidence, "MEDIUM") : confidence,

@@ -1,3 +1,4 @@
+import type { FundamentalHealthStatus, HealthCheckStatus } from "@/domain/scoring/health-check";
 import type { AssetBucket, RecommendationState } from "@/domain/types";
 
 export const BUCKET_LABELS: Record<AssetBucket, string> = {
@@ -39,4 +40,18 @@ export const STATE_LABELS: Record<RecommendationState, string> = {
   OVERWEIGHT: "超配：停止新增，不强制卖出",
   REASSESS_THESIS: "基本面恶化，重新评估逻辑",
   LOW_CONFIDENCE: "数据可信度低，等待确认",
+};
+
+/** 基本面体检（v2）的结论文案 */
+export const FUNDAMENTAL_HEALTH_LABELS: Record<FundamentalHealthStatus, string> = {
+  HEALTHY: "正常",
+  DETERIORATING: "恶化",
+  UNKNOWN: "数据不足",
+  NOT_APPLICABLE: "不适用",
+};
+
+export const HEALTH_CHECK_STATUS_LABELS: Record<HealthCheckStatus, string> = {
+  OK: "通过",
+  BREACH: "不通过",
+  MISSING: "缺数据",
 };

@@ -1,4 +1,5 @@
 import type { Confidence, RecommendationState, RiskSeverity, ScorableAssetBucket } from "../types";
+import type { FundamentalHealth } from "./health-check";
 import type { RecommendationDirection } from "./state";
 
 export interface HistoricalObservation {
@@ -146,7 +147,10 @@ export interface ScoreResult {
   bucket: ScorableAssetBucket;
   asOf: string;
   cheapnessScore: number | null;
+  /** 基本面子分（历史分位，v6 起只作展示参考，不参与决策） */
   fundamentalScore: number | null;
+  /** 基本面体检（v6）：恶化 → REASSESS_THESIS；数据不足 → 最多小幅增配 */
+  fundamentalHealth: FundamentalHealth;
   trendScore: number | null;
   opportunityScore: number | null;
   confidence: Confidence;

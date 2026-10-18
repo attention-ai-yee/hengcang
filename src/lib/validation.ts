@@ -53,7 +53,8 @@ export const holdingPatchSchema = z
 export const manualScorePayloadSchema = z.object({
   assetBucket: z.enum(["GOLD", "VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"]),
   cheapnessScore: z.number().min(0).max(100),
-  fundamentalScore: z.number().int().min(0).max(100),
+  // v6：基本面不再打分，手工兜底只录体检结论（正常 / 恶化 / 数据不足）
+  fundamentalHealth: z.enum(["HEALTHY", "DETERIORATING", "UNKNOWN"]),
   trendScore: z.number().int().min(0).max(100),
   // 手工评分只作为「今天」的低可信度兜底：过去日期会以 (portfolio,bucket,asOf) upsert
   // 覆盖同日自动快照并把 candidateState 写进候选链，污染 3 日确认与回测状态（Code Review M9 加严）。

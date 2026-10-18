@@ -1,6 +1,8 @@
 # 衡仓（HengCang）
 # 《黄金评分模型与“基本面恶化”规则修订 v1.2》
 
+> **v2 更新（2026-10-18）**：本文的「宏观逆风 → 停止新增」规则（`goldMacroHeadwind`）已删除，宏观支持度改为只展示；配置吸引力分改为 70% 便宜程度 + 30% 趋势。原因与现行规则见 [v2 设计说明 §3.4](hengcang_v2_allocation_fundamentals_thesis.md)。本文保留作历史记录。
+
 **适用仓库**：`attention-ai-yee/hengcang`  
 **目标分支**：`main`  
 **用途**：直接交给 Codex 修改现有评分模型。  

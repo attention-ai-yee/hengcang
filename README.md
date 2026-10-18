@@ -7,13 +7,15 @@
 当前仓库完成了 MVP 的可运行框架：
 
 - Next.js App Router、TypeScript、Tailwind CSS 与响应式产品导航；
-- SQLite + Drizzle ORM，包含 15 张核心业务表和 4 个版本化 migration；
+- SQLite + Drizzle ORM，包含 18 张核心业务表和 7 个版本化 migration；
 - 手工资产模板、持仓 CRUD API、资产汇总、目标偏离和未拆分账户警告；
 - Dashboard、资产评分、持仓与风险、决策日志、回测、数据状态和设置页面（再平衡已并入持仓页）；
 - Manual、Tushare、FRED、Twelve Data、WGC Goldhub Provider Adapter 边界；
-- 评分引擎：黄金 v1.2、红利价值、科技成长 v1.4、宽基权益四套独立模型，趋势模型 v1.3；
-- 无前视滚动百分位与数据新鲜度闸门、缺失指标重权、50/30/20 配置吸引力分、硬仓位规则（单股 8% / 主题 ETF 15% / 单一主题 20%）接入评分状态、3 日确认和 7 天冷却；
+- 七个资产桶：现金与债券、黄金、红利与价值、科技与成长、宽基权益、海外权益、其他；v2 默认配置为 60% 权益、其中海外 25%（海外权益只按战略目标与区间管理，不打分）；
+- 评分引擎：黄金、红利价值、科技成长 v1.4、宽基权益四套独立模型，趋势模型 v1.3；基本面 v2 改为「体检 + 熔断」（恶化即暂停新增、重新评估），黄金宏观支持度只展示；
+- 无前视滚动百分位与数据新鲜度闸门、缺失指标重权、70/30 配置吸引力分（便宜程度/趋势）、硬仓位规则（单股 8% / 主题 ETF 15% / 单一主题 20%）接入评分状态、3 日确认和 7 天冷却；
 - `reserved_cash` 预留资金与基于可投资资产的仓位计算；
+- 持仓级投资逻辑、失效条件与事件日志：单一个股和主题 ETF 必写；消息对应到失效条件即暂停新增，写完复核才解除；
 - 资产汇总、单股/主题 ETF 上限和规范案例 A–E 单元测试；
 - Tushare 自动纵切：近 5 年行情、指数估值、实际利率、派生指标、观察值入库与 ScoreSnapshot；
 - Manual CSV/JSON 预览、幂等提交和手工覆盖优先级；
@@ -84,20 +86,26 @@ drizzle/             版本化 SQL migration
 评分引擎默认配置位于 `src/domain/scoring/default-config.json`。`OpportunityScore` 在界面统一显示为“配置吸引力分”，方向为“越高越值得考虑配置”：
 
 ```text
-OpportunityScore = 50% × Cheapness + 30% × Fundamental + 20% × Trend
+OpportunityScore = 70% × Cheapness + 30% × Trend
 ```
 
-评分计算只读取评估日已经发布的数据；数据超过 180 天未更新、基本面低于 35、单股/主题硬上限违规、桶仓位超限和低可信度会在配置吸引力分之后覆盖普通状态。风险严重度：硬上限违规为 CRITICAL，重新评估/超配为 WARNING，低可信度为 WATCH。趋势 v1.3 与科技 v1.4 的模型细节见 [模型修订](docs/hengcang_trend_v1_3_tech_v1_4.md)。
+基本面不再进入分数，改为体检：盈利同比最近两期（相隔约一个季度）都为负（科技再看营收，红利再看分红稳定性）即判定恶化，即时输出「重新评估投资逻辑」并暂停新增；体检数据不足时最多输出小幅增配。规则与理由见 [v2 设计说明](docs/hengcang_v2_allocation_fundamentals_thesis.md)。
+
+评分计算只读取评估日已经发布的数据；基本面体检不通过、单股/主题硬上限违规、桶仓位超限和低可信度（含数据超过 180 天未更新）会在配置吸引力分之后覆盖普通状态。风险严重度：硬上限违规为 CRITICAL，重新评估/超配为 WARNING，低可信度为 WATCH。趋势 v1.3 与科技 v1.4 的模型细节见 [模型修订](docs/hengcang_trend_v1_3_tech_v1_4.md)。
 
 ## 自动评分刷新
 
-配置 `TUSHARE_TOKEN` 后，在“资产评分”或“数据状态”点击“一键自动刷新评分”，也可以运行 `pnpm data:refresh`。首次运行（或 `FULL_BACKFILL=true`）回填近 5 年数据，日常增量拉取近 1 年；派生盈利增长会跨运行读取 DB 中的价格/PE 历史并做点内（`available_at`）配对，WGC 不可用时回退国内黄金 ETF 代理。观察值幂等写入，生成价格派生指标并更新四类 `ScoreSnapshot`。默认代理和指标映射见 [自动数据刷新](docs/automatic-data-refresh.md)。
+配置 `TUSHARE_TOKEN` 后，在“资产评分”或“数据状态”点击“一键自动刷新评分”，也可以运行 `pnpm data:refresh`。首次运行（或 `FULL_BACKFILL=true`）回填近 5 年数据，日常增量拉取近 1 年；财报（`fina_indicator`）与分红每周增量刷新一次（近 15 个月窗口）。价格/PE 派生的盈利增长单独存为 `*_DERIVED` 指标，只作参考、不进体检；WGC 不可用时回退国内黄金 ETF 代理。观察值幂等写入，生成价格派生指标并更新四类 `ScoreSnapshot`。默认代理和指标映射见 [自动数据刷新](docs/automatic-data-refresh.md)。
 
 ## 决策日志与信号
 
 “决策日志”页面记录每次人工动作（加仓/减仓/保持/暂停新增），写入时快照当时的评分状态与组合分布（`POST /api/decisions`）。记录 ADD / REDUCE 后，同方向建议在 7 天内被冷却抑制（评分照常更新，只是 `allowAdd=false`）。
 
 评分刷新只在推荐状态发生变化或出现硬上限违规时写入 `signals`（fingerprint 去重，仅最新评估日生成），因此仪表盘“最新信号”不会在状态不变时重复刷屏。
+
+## 投资逻辑与失效条件
+
+消息不会自动变成分数。在“持仓与风险”页点进某个持仓（`/holdings/[id]`），写下投资逻辑和 3–5 条可验证的失效条件；之后有消息就记录一条事件（日期、摘要、来源链接），对应到某条失效条件即触发：该持仓暂停新增，写一条 WARNING 信号，仪表盘常驻提醒，直到写完复核解除。已触发的条件不能删改；每 90 天提示一次季度复核。暂停是持仓级的，不改变所在资产桶的评分。详见 [v2 设计说明 §4](docs/hengcang_v2_allocation_fundamentals_thesis.md)。
 
 ## Manual 指标导入（高级兜底）
 

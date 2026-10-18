@@ -12,6 +12,10 @@ export const METRIC_CATALOG = {
   ROE: { label: "净资产收益率", defaultUnit: "percent" },
   EARNINGS_REVISION: { label: "盈利预期修正", defaultUnit: "percent" },
   INDEX_EARNINGS_GROWTH: { label: "指数盈利增长", defaultUnit: "percent" },
+  // v2：价格 ÷ PE 推算的盈利增长只作参考（财报季之间的近似），不进入评分和基本面体检，
+  // 也不再和成分股财报汇总口径混在同一条序列里（docs/hengcang_v2_*.md §2）。
+  EARNINGS_GROWTH_DERIVED: { label: "价格/PE 推算盈利增长（仅参考）", defaultUnit: "percent" },
+  INDEX_EARNINGS_GROWTH_DERIVED: { label: "价格/PE 推算指数盈利增长（仅参考）", defaultUnit: "percent" },
   EQUITY_RISK_PREMIUM: { label: "股权风险溢价", defaultUnit: "percent" },
   REAL_YIELD_10Y: { label: "10 年实际利率", defaultUnit: "percent" },
   DOLLAR_INDEX: { label: "美元广义指数", defaultUnit: "index" },

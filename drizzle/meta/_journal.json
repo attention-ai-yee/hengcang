@@ -36,6 +36,13 @@
       "when": 1792343402042,
       "tag": "0004_v2_allocation_targets",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792343732659,
+      "tag": "0005_v2_derived_growth_keys",
+      "breakpoints": true
     }
   ]
 }

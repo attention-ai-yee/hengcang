@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { shanghaiDate } from "@/lib/shanghai";
 import { getDatabase } from "@/db/client";
 import { dataSourceStatus, metricObservations } from "@/db/schema";
@@ -123,6 +123,52 @@ function maxAvailableAt(...values: Array<string | undefined>): string {
   return latest;
 }
 
+/** v2：派生盈利增长写入单独的 *_DERIVED 指标，只作参考，不和财报汇总口径混成一条序列。 */
+export function derivedGrowthMetricKey(bucket: Exclude<ScorableAssetBucket, "GOLD">): CanonicalMetricKey {
+  return bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH_DERIVED" : "EARNINGS_GROWTH_DERIVED";
+}
+
+/** 财报（fina_indicator）与分红历史的增量刷新间隔：每周一次即可跟上财报季，避免每 6 小时重复拉几百只成分股。 */
+export const FUNDAMENTALS_REFRESH_INTERVAL_DAYS = 7;
+/** 增量刷新的财报窗口：15 个月覆盖每只成分股最近 4–5 个报告期，新评估日的「最新已披露财报」一定在窗口内。 */
+export const FUNDAMENTALS_INCREMENTAL_WINDOW_MONTHS = 15;
+const FUNDAMENTALS_STATUS_PROVIDER = "tushare-fina";
+
+export type FundamentalsRefreshMode = "FULL" | "INCREMENTAL" | "SKIP";
+
+/**
+ * v1 只在全量回填时拉财报，日常刷新永远跳过：ROE、营收增长等没有派生兜底的指标半年后
+ * 触发 180 天新鲜度闸门。v2：全量回填照旧；否则距上次成功超过 7 天就做一次增量。
+ */
+export function fundamentalsRefreshMode(input: { fullBackfill: boolean; lastSuccessAt: string | null | undefined; now: Date }): FundamentalsRefreshMode {
+  if (input.fullBackfill) return "FULL";
+  if (!input.lastSuccessAt) return "INCREMENTAL";
+  const elapsedMs = input.now.getTime() - Date.parse(input.lastSuccessAt);
+  return Number.isFinite(elapsedMs) && elapsedMs < FUNDAMENTALS_REFRESH_INTERVAL_DAYS * 24 * 60 * 60 * 1000 ? "SKIP" : "INCREMENTAL";
+}
+
+/**
+ * 增量模式只为「上次汇总之后」的新日期生成桶级汇总：窗口只有 15 个月，若重算窗口前部的历史日期，
+ * 部分成分股的当时最新财报会落在窗口之外，低覆盖率的结果会 upsert 覆盖全量回填时算好的历史行。
+ */
+export function selectAggregationDates(snapshotDates: string[], lastAggregateAsOf: string | null): string[] {
+  return [...new Set(snapshotDates)].filter((date) => lastAggregateAsOf === null || date > lastAggregateAsOf).sort();
+}
+
+function lastAggregateAsOf(bucket: ScorableAssetBucket): string | null {
+  const rows = getDatabase()
+    .select({ asOf: metricObservations.asOf })
+    .from(metricObservations)
+    .where(and(
+      eq(metricObservations.subjectType, "ASSET_BUCKET"),
+      eq(metricObservations.subjectId, bucket),
+      eq(metricObservations.provider, AGGREGATE_PROVIDER),
+      inArray(metricObservations.metricKey, ["ROE", "EARNINGS_GROWTH", "REVENUE_GROWTH", "INDEX_EARNINGS_GROWTH"]),
+    ))
+    .all();
+  return rows.reduce<string | null>((latest, row) => (!latest || row.asOf > latest ? row.asOf : latest), null);
+}
+
 /**
  * 由 PRICE_CLOSE / PE 序列派生的盈利同比增速（EPS = price/pe 的【日历约一年】增速）。
  *
@@ -148,7 +194,7 @@ function derivedEarningsGrowth(bucket: Exclude<ScorableAssetBucket, "GOLD">, row
     const pe = Number(row.value);
     return priceRow && price > 0 && pe > 0 ? [{ row, priceRow, value: price / pe }] : [];
   }).sort((first, second) => first.row.asOf.localeCompare(second.row.asOf));
-  const metricKey: CanonicalMetricKey = bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH" : "EARNINGS_GROWTH";
+  const metricKey = derivedGrowthMetricKey(bucket);
   const output: ProviderMetricObservationInput[] = [];
   for (let index = 0; index < series.length; index += 1) {
     const current = series[index];
@@ -312,8 +358,8 @@ async function refreshGoldEtfFlow(provider: TushareProvider, range: { start: str
   }
   return calculateGoldEtfFlow3m(shares, navs).map((point) => ({ subjectType: "ASSET_BUCKET", subjectId: "GOLD", metricKey: "GOLD_ETF_FLOW_3M", value: point.value.toFixed(2), unit: "currency", provider: "tushare-gold-etf-proxy", observedAt: `${point.asOf}T15:00:00+08:00`, availableAt: point.availableAt, asOf: point.asOf, fetchedAt, quality: "PARTIAL", metadataJson: JSON.stringify({ proxySymbols: getGoldEtfProxies() }) }));
 }
-async function refreshFundamentals(provider: TushareProvider, proxies: TushareScoreProxy[], evaluationDate: string, range: { start: string; end: string }, fullBackfill: boolean, warnings: string[], fetchedAt: string): Promise<ProviderMetricObservationInput[]> {
-  if (!fullBackfill) return [];
+export async function refreshFundamentals(provider: Pick<TushareProvider, "getEquityFundamentals">, proxies: TushareScoreProxy[], evaluationDate: string, range: { start: string; end: string }, mode: FundamentalsRefreshMode, warnings: string[], fetchedAt: string): Promise<ProviderMetricObservationInput[]> {
+  if (mode === "SKIP") return [];
   const symbols = new Set(proxies.filter((item) => item.bucket !== "GOLD").flatMap((proxy) => readLatestIndexWeights(proxy.symbol, evaluationDate).map((weight) => weight.constituentSymbol)));
   const snapshots: EquityFundamentalSnapshot[] = []; const output: ProviderMetricObservationInput[] = [];
   for (const symbol of symbols) {
@@ -321,7 +367,8 @@ async function refreshFundamentals(provider: TushareProvider, proxies: TushareSc
     snapshots.push(...result.data);
     for (const row of result.data) for (const [metricKey, value] of [["ROE", row.roe], ["EARNINGS_GROWTH", row.earningsGrowth], ["REVENUE_GROWTH", row.revenueGrowth]] as const) if (value !== null) output.push({ subjectType: "INSTRUMENT", subjectId: symbol, metricKey, value: value.toFixed(8), unit: "percent", provider: "tushare", observedAt: `${row.reportPeriod}T23:59:59+08:00`, availableAt: row.availableAt, asOf: row.reportPeriod, fetchedAt, quality: "VALID" });
   }
-  for (const date of [...new Set(snapshots.map((row) => row.availableAt.slice(0, 10)))].sort()) for (const proxy of proxies.filter((item) => item.bucket !== "GOLD")) {
+  const snapshotDates = snapshots.map((row) => row.availableAt.slice(0, 10)).filter((date) => date <= evaluationDate);
+  for (const proxy of proxies.filter((item) => item.bucket !== "GOLD")) for (const date of selectAggregationDates(snapshotDates, mode === "INCREMENTAL" ? lastAggregateAsOf(proxy.bucket) : null)) {
     const weightInfo = readWeightsWithAge(proxy.symbol, date, warnings); if (!weightInfo) continue;
     const weights = weightInfo.points;
     const metrics = degradeQuality(
@@ -409,13 +456,22 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
   // 美元指数的历史压到 1 年内而把黄金基本面钉在 LOW（置信度年限不足）。
   const goldMacro = await refreshGoldMacro(fred, { start: yearsBefore(end, 5), end }, fredWarnings);
   byBucket.set("GOLD", [...(byBucket.get("GOLD") ?? []), ...goldMacro.rows, ...await refreshGoldEtfFlow(provider, { start: fullBackfill ? range.start : yearsBefore(end, 1), end }, warnings)]);
-  const fundamentalRows = await refreshFundamentals(provider, proxies, end, range, fullBackfill, warnings, fetchedAt); const allRows = [...fundamentalRows.filter((row) => row.subjectType === "INSTRUMENT")];
+  // v2：财报不再只在全量回填时拉取——距上次成功超过 7 天就增量刷新一次（15 个月窗口，只补新日期）。
+  const fundamentalsStatus = getDatabase().select().from(dataSourceStatus).where(eq(dataSourceStatus.provider, FUNDAMENTALS_STATUS_PROVIDER)).get();
+  const fundamentalsMode = fundamentalsRefreshMode({ fullBackfill, lastSuccessAt: fundamentalsStatus?.lastSuccessAt, now });
+  const fundamentalsRange = fundamentalsMode === "FULL" ? range : { start: monthsBefore(end, FUNDAMENTALS_INCREMENTAL_WINDOW_MONTHS), end };
+  const fundamentalWarnings: string[] = [];
+  const fundamentalRows = await refreshFundamentals(provider, proxies, end, fundamentalsRange, fundamentalsMode, fundamentalWarnings, fetchedAt); const allRows = [...fundamentalRows.filter((row) => row.subjectType === "INSTRUMENT")];
+  warnings.push(...fundamentalWarnings);
+  if (fundamentalsMode !== "SKIP") {
+    saveProviderStatus(FUNDAMENTALS_STATUS_PROVIDER, fundamentalRows.length > 0 ? (fundamentalWarnings.length ? "DEGRADED" : "READY") : "ERROR", fetchedAt, fundamentalWarnings, { fina_indicator: fundamentalsMode, dividend: fundamentalsMode, window: `${fundamentalsRange.start}..${fundamentalsRange.end}` });
+  }
   for (const row of fundamentalRows.filter((row) => row.subjectType === "ASSET_BUCKET")) byBucket.set(row.subjectId as ScorableAssetBucket, [...(byBucket.get(row.subjectId as ScorableAssetBucket) ?? []), row]);
-  byBucket.set("VALUE_DIVIDEND", [...(byBucket.get("VALUE_DIVIDEND") ?? []), ...await refreshDividendStability(provider, proxies.find((item) => item.bucket === "VALUE_DIVIDEND"), end, fullBackfill, warnings, fetchedAt)]);
+  // 分红历史一年才变一次，跟财报同一节奏（v1 每 6 小时重拉全部成分股）。
+  if (fundamentalsMode !== "SKIP") byBucket.set("VALUE_DIVIDEND", [...(byBucket.get("VALUE_DIVIDEND") ?? []), ...await refreshDividendStability(provider, proxies.find((item) => item.bucket === "VALUE_DIVIDEND"), end, fullBackfill, warnings, fetchedAt)]);
   for (const bucket of ["VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"] as const) {
+    // 派生盈利增长写入单独的 *_DERIVED 参考指标（每次都算），不再充当财报口径的兜底。
     const rows = byBucket.get(bucket) ?? [];
-    const target = bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH" : "EARNINGS_GROWTH";
-    if (rows.some((row) => row.metricKey === target && row.provider === AGGREGATE_PROVIDER)) continue;
     const derived = derivedEarningsGrowth(bucket, rows, fetchedAt, end);
     // 派生兜底失效不再静默：增量模式下缺 PE 历史会让财务基本面永久陈旧。
     if (derived.length === 0) pushWarningOnce(warnings, `${bucket} 派生盈利增长无可用 PE 历史`);
@@ -438,7 +494,7 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
     const scores = requests.length > 0 ? await refreshScoresForBuckets(requests, { skipConfirmation: fullBackfill }) : [];
     reports.push({ bucket: proxy.bucket, proxy: proxy.label, symbol: proxy.symbol, observationCount: rows.length, latestAsOf, scoreSaved: scores.some((score) => score.saved), warnings });
   }
-  const status = reports.some((report) => report.observationCount > 0) ? (warnings.length ? "DEGRADED" : "READY") : "ERROR"; saveProviderStatus("tushare", status, fetchedAt, warnings, { index_dailybasic: directCapability, index_weight: "READY", daily_basic: "READY", fina_indicator: fullBackfill ? "REQUESTED" : "INCREMENTAL_PENDING", fund_share: "READY", fund_nav: "READY" }); // FRED 状态独立评估（Code Review M13）：不凭环境变量标 READY，也不把 FRED 失败算进 tushare。
+  const status = reports.some((report) => report.observationCount > 0) ? (warnings.length ? "DEGRADED" : "READY") : "ERROR"; saveProviderStatus("tushare", status, fetchedAt, warnings, { index_dailybasic: directCapability, index_weight: "READY", daily_basic: "READY", fina_indicator: fundamentalsMode, fund_share: "READY", fund_nav: "READY" }); // FRED 状态独立评估（Code Review M13）：不凭环境变量标 READY，也不把 FRED 失败算进 tushare。
   const fredStatus: AutomaticRefreshReport["status"] = !process.env.FRED_API_KEY
     ? "NOT_CONFIGURED"
     : goldMacro.total > 0 && goldMacro.fetchedSeriesCount === 0

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ALLOCATION_BANDS } from "@/domain/settings";
+import { DEFAULT_ALLOCATION_BANDS, V1_DEFAULT_ALLOCATION_BANDS } from "@/domain/settings";
 import {
   BACKTEST_BUCKETS,
   buildRebalance,
@@ -337,8 +337,8 @@ describe("回测引擎纯函数", () => {
       }
     });
 
-    it("默认四桶配置：上限≈TECH 57.14% / VALUE 50% / GOLD·BROAD 21.43%，target 不超限且合计为 1", () => {
-      const targets = Object.entries(DEFAULT_ALLOCATION_BANDS).map(([assetBucket, band]) => ({ assetBucket, ...band }));
+    it("v1 默认四桶配置：上限≈TECH 57.14% / VALUE 50% / GOLD·BROAD 21.43%，target 不超限且合计为 1", () => {
+      const targets = Object.entries(V1_DEFAULT_ALLOCATION_BANDS).map(([assetBucket, band]) => ({ assetBucket, ...band }));
       const result = normalizedTargets(targets);
       expect(result.fallback).toBe(false);
       expect(result.limitMax.TECH_GROWTH).toBeCloseTo(4000 / 7000, 10);
@@ -351,6 +351,23 @@ describe("回测引擎纯函数", () => {
       }
       // 中性评分（机会分 40 -> 乘数 1）下含上限的评分映射不得削弱任何桶的目标权重：
       // 修复前 TECH target 42.9% 会被「总资产口径」的 40% 上限误钳。
+      const neutral = Object.fromEntries(BACKTEST_BUCKETS.map((bucket) => [bucket, 40]));
+      const capped = scoreDrivenWeights(neutral, result.target, result.limitMax);
+      for (const bucket of BACKTEST_BUCKETS) {
+        expect(capped[bucket]).toBeCloseTo(result.target[bucket], 10);
+      }
+    });
+
+    it("v2 默认配置（海外权益不参与评分回测）：按四个评分桶的目标合计归一，target 不超限且合计为 1", () => {
+      const targets = Object.entries(DEFAULT_ALLOCATION_BANDS).map(([assetBucket, band]) => ({ assetBucket, ...band }));
+      const result = normalizedTargets(targets);
+      const scoredTotal = BACKTEST_BUCKETS.reduce((sum, bucket) => sum + DEFAULT_ALLOCATION_BANDS[bucket].targetBps, 0);
+      expect(result.fallback).toBe(false);
+      for (const bucket of BACKTEST_BUCKETS) {
+        expect(result.limitMax[bucket]).toBeCloseTo(DEFAULT_ALLOCATION_BANDS[bucket].maxBps / scoredTotal, 10);
+        expect(result.target[bucket]).toBeLessThanOrEqual(result.limitMax[bucket] + 1e-12);
+      }
+      expect(Object.values(result.target).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12);
       const neutral = Object.fromEntries(BACKTEST_BUCKETS.map((bucket) => [bucket, 40]));
       const capped = scoreDrivenWeights(neutral, result.target, result.limitMax);
       for (const bucket of BACKTEST_BUCKETS) {

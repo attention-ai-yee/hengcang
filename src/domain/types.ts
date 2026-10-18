@@ -4,11 +4,16 @@ export const ASSET_BUCKETS = [
   "VALUE_DIVIDEND",
   "TECH_GROWTH",
   "BROAD_EQUITY",
+  "OVERSEAS_EQUITY",
   "OTHER",
 ] as const;
 
 export type AssetBucket = (typeof ASSET_BUCKETS)[number];
-export type ScorableAssetBucket = Exclude<AssetBucket, "CASH_BONDS" | "OTHER">;
+/**
+ * 参与配置吸引力评分的资产桶。海外权益（v2 新增）只按战略仓位与再平衡管理：
+ * Tushare 没有标普 500 等海外指数的估值数据，不做评分（见 docs/hengcang_v2_*.md）。
+ */
+export type ScorableAssetBucket = Exclude<AssetBucket, "CASH_BONDS" | "OTHER" | "OVERSEAS_EQUITY">;
 
 export const RECOMMENDATION_STATES = [
   "STRONG_ADD_ALLOWED",

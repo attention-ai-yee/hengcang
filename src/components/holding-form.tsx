@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ASSET_BUCKETS } from "@/domain/types";
+import { BUCKET_LABELS } from "@/lib/presentation";
 import { shanghaiDate } from "@/lib/shanghai";
 
 function yuanToMinor(value: string): string {
@@ -41,7 +43,7 @@ export function HoldingForm() {
       <label className="grid gap-1.5 text-sm">名称<input required name="name" className="rounded-xl border border-[#cfd8d2] bg-white px-3 py-2.5" /></label>
       <label className="grid gap-1.5 text-sm">代码<input name="symbol" className="rounded-xl border border-[#cfd8d2] bg-white px-3 py-2.5" placeholder="可选" /></label>
       <label className="grid gap-1.5 text-sm">类型<select name="instrumentType" className="rounded-xl border border-[#cfd8d2] bg-white px-3 py-2.5"><option value="FUND">基金</option><option value="STOCK">股票</option><option value="ETF">ETF</option><option value="CASH">现金</option><option value="BOND">债券</option><option value="GOLD">黄金</option><option value="ACCOUNT_AGGREGATE">账户汇总</option></select></label>
-      <label className="grid gap-1.5 text-sm">资产桶<select name="assetBucket" className="rounded-xl border border-[#cfd8d2] bg-white px-3 py-2.5"><option value="CASH_BONDS">现金与债券</option><option value="GOLD">黄金</option><option value="VALUE_DIVIDEND">红利与价值</option><option value="TECH_GROWTH">科技与成长</option><option value="BROAD_EQUITY">宽基权益</option><option value="OTHER">其他</option></select></label>
+      <label className="grid gap-1.5 text-sm">资产桶<select name="assetBucket" className="rounded-xl border border-[#cfd8d2] bg-white px-3 py-2.5">{ASSET_BUCKETS.map((bucket) => <option key={bucket} value={bucket}>{BUCKET_LABELS[bucket]}</option>)}</select></label>
       <label className="grid gap-1.5 text-sm md:col-span-2">当前市值（元）<input required name="marketValue" inputMode="decimal" pattern="\d+(\.\d{1,2})?" className="rounded-xl border border-[#cfd8d2] bg-white px-3 py-2.5" /></label>
       <div className="flex flex-wrap gap-4 text-sm md:col-span-2">
         <label><input type="checkbox" name="isSingleStock" className="mr-2" />单一个股</label>

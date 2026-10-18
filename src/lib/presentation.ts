@@ -6,6 +6,7 @@ export const BUCKET_LABELS: Record<AssetBucket, string> = {
   VALUE_DIVIDEND: "红利与价值",
   TECH_GROWTH: "科技与成长",
   BROAD_EQUITY: "宽基权益",
+  OVERSEAS_EQUITY: "海外权益",
   OTHER: "其他",
 };
 

@@ -1,4 +1,5 @@
 import type { FundamentalHealthStatus, HealthCheckStatus } from "@/domain/scoring/health-check";
+import type { ThesisAttentionKind } from "@/domain/thesis";
 import type { AssetBucket, RecommendationState } from "@/domain/types";
 
 export const BUCKET_LABELS: Record<AssetBucket, string> = {
@@ -54,4 +55,10 @@ export const HEALTH_CHECK_STATUS_LABELS: Record<HealthCheckStatus, string> = {
   OK: "通过",
   BREACH: "不通过",
   MISSING: "缺数据",
+};
+
+export const THESIS_ATTENTION_LABELS: Record<ThesisAttentionKind, string> = {
+  BREACHED: "逻辑待复核：暂停新增",
+  REVIEW_DUE: "季度复核到期",
+  MISSING: "未写投资逻辑",
 };

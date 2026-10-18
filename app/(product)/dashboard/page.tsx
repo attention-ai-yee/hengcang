@@ -5,10 +5,12 @@ import { Card, PageIntro, StatusPill } from "@/components/ui";
 import { ScoreExplanationTooltip } from "@/components/score-explanation-tooltip";
 import { formatBps, formatMoneyMinor } from "@/domain/portfolio";
 import { ASSET_BUCKETS, type AssetBucket } from "@/domain/types";
-import { BUCKET_LABELS, CONFIDENCE_LABELS, FUNDAMENTAL_HEALTH_LABELS, STATE_LABELS } from "@/lib/presentation";
+import { thesisAttention } from "@/domain/thesis";
+import { BUCKET_LABELS, CONFIDENCE_LABELS, FUNDAMENTAL_HEALTH_LABELS, STATE_LABELS, THESIS_ATTENTION_LABELS } from "@/lib/presentation";
 import { readFundamentalHealth } from "@/lib/score-details";
 import { listLatestScores, listLatestSignals } from "@/db/queries";
 import { getPortfolioView } from "@/server/portfolio-service";
+import { listThesisSummaries } from "@/server/thesis-service";
 
 /** 三交易日确认期：候选状态尚未确认时，旧确认状态标签会与当前置信度徽章矛盾（如「高可信度」+「数据可信度低」）。 */
 function readTransition(snapshot: { componentsJson: string; recommendationState: string }): { transitioning: boolean; label: string } {
@@ -25,7 +27,9 @@ function readTransition(snapshot: { componentsJson: string; recommendationState:
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [view, scores, signals] = await Promise.all([getPortfolioView(), listLatestScores(), listLatestSignals(5)]);
+  const [view, scores, signals, theses] = await Promise.all([getPortfolioView(), listLatestScores(), listLatestSignals(5), listThesisSummaries()]);
+  const attention = thesisAttention(view.holdings, theses);
+  const anyBreached = attention.some((item) => item.kind === "BREACHED");
   const total = BigInt(view.summary.totalValueMinor);
   const investable = BigInt(view.summary.investableAssetsMinor);
   const reserved = BigInt(view.summary.reservedCashMinor);
@@ -55,6 +59,25 @@ export default async function DashboardPage() {
           </Link>
         }
       />
+
+      {attention.length > 0 && (
+        <Card className={`mb-5 p-5 ${anyBreached ? "border-[#efc8c3] bg-[#fff7f6]" : "border-[#ead7b7] bg-[#fffaf1]"}`}>
+          <div className={`flex items-center gap-2 ${anyBreached ? "text-[#91352f]" : "text-[#8a570b]"}`}>
+            <AlertTriangle size={18} />
+            <h2 className="font-semibold">投资逻辑提醒</h2>
+          </div>
+          <ul className="mt-3 grid gap-2 text-sm">
+            {attention.map((item) => (
+              <li key={item.holdingId} className="flex flex-wrap items-center gap-2">
+                <StatusPill tone={item.kind === "BREACHED" ? "danger" : "warn"}>{THESIS_ATTENTION_LABELS[item.kind]}</StatusPill>
+                <strong>{item.name}</strong>
+                {item.triggered.length > 0 && <span className="text-[#68756e]">触发：{item.triggered.join("；")}</span>}
+                <Link href={`/holdings/${item.holdingId}`} className="text-xs font-semibold text-[#315f4d] underline">去处理</Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <section className="mb-5 grid gap-4 md:grid-cols-4">
         <Card className="p-5 md:col-span-2">

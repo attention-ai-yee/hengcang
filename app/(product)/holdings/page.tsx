@@ -2,13 +2,15 @@ import Link from "next/link";
 import { Card, PageIntro, StatusPill } from "@/components/ui";
 import { formatBps, formatMoneyMinor } from "@/domain/portfolio";
 import { ASSET_BUCKETS, type AssetBucket } from "@/domain/types";
-import { BUCKET_LABELS, instrumentTypeLabel } from "@/lib/presentation";
+import { needsThesis } from "@/domain/thesis";
+import { BUCKET_LABELS, instrumentTypeLabel, THESIS_ATTENTION_LABELS } from "@/lib/presentation";
 import { getPortfolioView } from "@/server/portfolio-service";
+import { listThesisSummaries, type ThesisSummary } from "@/server/thesis-service";
 
 export const dynamic = "force-dynamic";
 
 export default async function HoldingsPage() {
-  const view = await getPortfolioView();
+  const [view, theses] = await Promise.all([getPortfolioView(), listThesisSummaries()]);
   // 占比与预留资金扣除已在服务层统一计算（Code Review M15），这里只做展示。
   const risks = new Map(view.holdingRisks.map((risk) => [risk.id, risk]));
   // 再平衡参考所需（原 /rebalance 页逻辑，随菜单合并迁入）
@@ -28,8 +30,8 @@ export default async function HoldingsPage() {
         </Card>
       )}
       <Card className="overflow-x-auto p-2">
-        <table className="data-table min-w-[900px]">
-          <thead><tr><th>标的</th><th>资产桶</th><th>当前市值</th><th>可投资资产占比</th><th>类型</th><th>状态</th><th>数据时间</th></tr></thead>
+        <table className="data-table min-w-[1020px]">
+          <thead><tr><th>标的</th><th>资产桶</th><th>当前市值</th><th>可投资资产占比</th><th>类型</th><th>状态</th><th>投资逻辑</th><th>数据时间</th></tr></thead>
           <tbody>
             {view.holdings.map((holding) => {
               const value = BigInt(holding.marketValueMinor);
@@ -43,6 +45,7 @@ export default async function HoldingsPage() {
                   <td>{formatBps(bps)}</td>
                   <td>{instrumentTypeLabel(holding.instrumentType)}</td>
                   <td className="space-x-1">{risk?.isOverweight && <StatusPill tone="danger">超配（单股/ETF 上限 {formatBps(risk.applicableLimitBps ?? 0)}）</StatusPill>}{risk && !risk.isOverweight && !risk.canAdd && <StatusPill tone="warn">已达上限</StatusPill>}{holding.isApproximate && <StatusPill tone="warn">约数</StatusPill>}{holding.needsBreakdown && <StatusPill tone="danger">待拆分</StatusPill>}{!holding.isApproximate && !holding.needsBreakdown && <StatusPill tone="good">已确认</StatusPill>}</td>
+                  <td><ThesisCell holdingId={holding.id} summary={theses.get(holding.id)} required={needsThesis(holding)} /></td>
                   <td>{holding.asOf}</td>
                 </tr>
               );
@@ -74,5 +77,22 @@ export default async function HoldingsPage() {
         })}
       </div>
     </>
+  );
+}
+
+/** 持仓级投资逻辑状态（v2，§4）：触发未复核 → 暂停新增；集中持仓没写逻辑 → 提醒补写。 */
+function ThesisCell({ holdingId, summary, required }: { holdingId: string; summary?: ThesisSummary; required: boolean }) {
+  const pill = summary?.status === "BREACHED"
+    ? <StatusPill tone="danger">{THESIS_ATTENTION_LABELS.BREACHED}</StatusPill>
+    : summary?.status === "INTACT"
+      ? <StatusPill tone={summary.reviewDue ? "warn" : "good"}>{summary.reviewDue ? THESIS_ATTENTION_LABELS.REVIEW_DUE : "逻辑完好"}</StatusPill>
+      : required
+        ? <StatusPill tone="warn">{THESIS_ATTENTION_LABELS.MISSING}</StatusPill>
+        : null;
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      {pill}
+      <Link href={`/holdings/${holdingId}`} className="text-xs font-semibold text-[#315f4d] underline">{summary ? "查看" : "写逻辑"}</Link>
+    </span>
   );
 }

@@ -271,3 +271,54 @@ export const backtestResults = sqliteTable("backtest_results", {
   seriesJson: text("series_json").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+/**
+ * 持仓级投资逻辑（v2，docs/hengcang_v2_allocation_fundamentals_thesis.md §4）：
+ * 每个持仓一份「投资逻辑 + 失效条件」。消息以带日期和来源的事件记录，
+ * 事件对应到某条失效条件即触发它——该持仓暂停新增，写完复核才能解除。
+ */
+export const holdingTheses = sqliteTable(
+  "holding_theses",
+  {
+    id: text("id").primaryKey(),
+    portfolioId: text("portfolio_id").notNull().references(() => portfolios.id, { onDelete: "cascade" }),
+    holdingId: text("holding_id").notNull().references(() => holdings.id, { onDelete: "cascade" }),
+    thesis: text("thesis").notNull(),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex("holding_thesis_holding_unique").on(table.holdingId)],
+);
+
+export const thesisBreakers = sqliteTable(
+  "thesis_breakers",
+  {
+    id: text("id").primaryKey(),
+    thesisId: text("thesis_id").notNull().references(() => holdingTheses.id, { onDelete: "cascade" }),
+    description: text("description").notNull(),
+    /** ACTIVE：监控中；TRIGGERED：已被事件触发，等待复核 */
+    status: text("status").notNull().default("ACTIVE"),
+    triggeredAt: text("triggered_at"),
+    triggeredByEventId: text("triggered_by_event_id"),
+    lastReviewedAt: text("last_reviewed_at"),
+    ...timestamps,
+  },
+  (table) => [index("thesis_breakers_thesis_idx").on(table.thesisId)],
+);
+
+export const thesisEvents = sqliteTable(
+  "thesis_events",
+  {
+    id: text("id").primaryKey(),
+    thesisId: text("thesis_id").notNull().references(() => holdingTheses.id, { onDelete: "cascade" }),
+    /** NEWS：消息 / 事件；REVIEW：复核结论 */
+    kind: text("kind").notNull(),
+    /** 事件发生日（YYYY-MM-DD，上海时区），不晚于记录当天 */
+    occurredOn: text("occurred_on").notNull(),
+    summary: text("summary").notNull(),
+    sourceUrl: text("source_url"),
+    breakerId: text("breaker_id").references(() => thesisBreakers.id, { onDelete: "set null" }),
+    /** 记录时间（点内时间：后来补记的旧消息不会改写当时的状态） */
+    recordedAt: text("recorded_at").notNull(),
+  },
+  (table) => [index("thesis_events_thesis_idx").on(table.thesisId, table.recordedAt)],
+);

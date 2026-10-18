@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_THESIS_BREAKERS } from "@/domain/thesis";
 import { ASSET_BUCKETS } from "@/domain/types";
 import { shanghaiDate } from "@/lib/shanghai";
 
@@ -90,3 +91,35 @@ export const decisionPayloadSchema = z.object({
   // 可选；缺省时服务端写入上海当前时间。必须带时区，避免点内时间歧义。
   decidedAt: z.iso.datetime({ offset: true, error: "决策时间必须是带时区的 ISO 8601 时间" }).optional(),
 });
+
+/** 投资逻辑 + 失效条件（v2，§4）。已有条目带 id（修改/保留），新条目不带 id。 */
+export const thesisPayloadSchema = z.object({
+  thesis: z.string().trim().min(1, "请写下投资逻辑").max(2000, "投资逻辑不能超过 2000 字"),
+  breakers: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1).max(64).optional(),
+        description: z.string().trim().min(1, "失效条件不能为空").max(200, "每条失效条件不超过 200 字"),
+      }),
+    )
+    .max(MAX_THESIS_BREAKERS, `失效条件最多 ${MAX_THESIS_BREAKERS} 条`),
+});
+
+const thesisEventDate = z.iso.date().refine((value) => value <= shanghaiDate(), "事件日期不能晚于今天（上海时区）");
+
+/** 消息事件（可对应一条失效条件，对应即触发）或复核结论（对应已触发的条件即解除）。 */
+export const thesisEventPayloadSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("NEWS"),
+    occurredOn: thesisEventDate,
+    summary: z.string().trim().min(1, "请写下发生了什么").max(500, "事件摘要不能超过 500 字"),
+    sourceUrl: z.url({ protocol: /^https?$/, error: "来源链接必须是 http(s) 网址" }).max(500).optional().nullable(),
+    breakerId: z.string().trim().min(1).max(64).optional().nullable(),
+  }),
+  z.object({
+    kind: z.literal("REVIEW"),
+    occurredOn: thesisEventDate,
+    summary: z.string().trim().min(1, "请写下复核结论").max(1000, "复核结论不能超过 1000 字"),
+    breakerId: z.string().trim().min(1).max(64).optional().nullable(),
+  }),
+]);

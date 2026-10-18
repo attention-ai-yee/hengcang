@@ -59,7 +59,7 @@ export async function getThesisView(holdingId: string, today = shanghaiDate()): 
   const thesis = findThesis(holdingId) ?? null;
   const db = getDatabase();
   const breakers = thesis
-    ? db.select().from(thesisBreakers).where(eq(thesisBreakers.thesisId, thesis.id)).orderBy(asc(thesisBreakers.createdAt), asc(thesisBreakers.id)).all()
+    ? db.select().from(thesisBreakers).where(eq(thesisBreakers.thesisId, thesis.id)).orderBy(asc(thesisBreakers.position), asc(thesisBreakers.createdAt), asc(thesisBreakers.id)).all()
     : [];
   const events = thesis
     ? db.select().from(thesisEvents).where(eq(thesisEvents.thesisId, thesis.id)).orderBy(desc(thesisEvents.recordedAt)).all()
@@ -103,11 +103,11 @@ export async function saveThesis(holdingId: string, payload: ThesisPayload, now 
         : new ThesisError("UNKNOWN_BREAKER", "失效条件不存在或不属于这份投资逻辑", 422);
     }
     for (const item of plan.update) {
-      tx.update(thesisBreakers).set({ description: item.description, updatedAt: timestamp }).where(eq(thesisBreakers.id, item.id)).run();
+      tx.update(thesisBreakers).set({ description: item.description, position: item.position, updatedAt: timestamp }).where(eq(thesisBreakers.id, item.id)).run();
     }
     if (plan.remove.length > 0) tx.delete(thesisBreakers).where(inArray(thesisBreakers.id, plan.remove)).run();
-    for (const description of plan.insert) {
-      tx.insert(thesisBreakers).values({ id: crypto.randomUUID(), thesisId: thesis.id, description, status: "ACTIVE", createdAt: timestamp, updatedAt: timestamp }).run();
+    for (const item of plan.insert) {
+      tx.insert(thesisBreakers).values({ id: crypto.randomUUID(), thesisId: thesis.id, description: item.description, position: item.position, status: "ACTIVE", createdAt: timestamp, updatedAt: timestamp }).run();
     }
   });
   return (await getThesisView(holdingId, shanghaiDate(now))) as ThesisView;
@@ -195,7 +195,7 @@ export async function listThesisSummaries(today = shanghaiDate()): Promise<Map<s
   const theses = db.select().from(holdingTheses).where(eq(holdingTheses.portfolioId, DEFAULT_PORTFOLIO_ID)).all();
   if (theses.length === 0) return new Map();
   const ids = theses.map((thesis) => thesis.id);
-  const breakers = db.select().from(thesisBreakers).where(inArray(thesisBreakers.thesisId, ids)).all();
+  const breakers = db.select().from(thesisBreakers).where(inArray(thesisBreakers.thesisId, ids)).orderBy(asc(thesisBreakers.position)).all();
   const reviews = db.select().from(thesisEvents).where(and(inArray(thesisEvents.thesisId, ids), eq(thesisEvents.kind, "REVIEW"))).all();
   return new Map(theses.map((thesis) => {
     const own = breakers.filter((breaker) => breaker.thesisId === thesis.id);

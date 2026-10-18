@@ -34,18 +34,32 @@ describe("reviewDue", () => {
 
 describe("planBreakerChanges", () => {
   const existing = [
-    { id: "a", description: "行业资本开支同比下滑超过 30%", status: "ACTIVE" },
-    { id: "b", description: "最大客户订单明显缩减", status: "TRIGGERED" },
+    { id: "a", description: "行业资本开支同比下滑超过 30%", status: "ACTIVE", position: 0 },
+    { id: "b", description: "最大客户订单明显缩减", status: "TRIGGERED", position: 1 },
   ];
 
-  it("新增、修改、删除未触发的条件", () => {
+  it("新增、修改、删除未触发的条件；顺序取提交顺序", () => {
     const plan = planBreakerChanges(existing, [
       { id: "a", description: "行业资本开支同比下滑超过 25%" },
       { id: "b", description: "最大客户订单明显缩减" },
       { description: "毛利率连续两个季度下滑" },
     ]);
-    expect(plan).toEqual({ ok: true, update: [{ id: "a", description: "行业资本开支同比下滑超过 25%" }], insert: ["毛利率连续两个季度下滑"], remove: [] });
+    expect(plan).toEqual({
+      ok: true,
+      update: [{ id: "a", description: "行业资本开支同比下滑超过 25%", position: 0 }],
+      insert: [{ description: "毛利率连续两个季度下滑", position: 2 }],
+      remove: [],
+    });
     expect(planBreakerChanges(existing.slice(0, 1), [])).toEqual({ ok: true, update: [], insert: [], remove: ["a"] });
+  });
+
+  it("删掉前面的条件后，已触发的条件可以前移（只改顺序、不改内容）", () => {
+    expect(planBreakerChanges(existing, [{ id: "b", description: "最大客户订单明显缩减" }])).toEqual({
+      ok: true,
+      update: [{ id: "b", description: "最大客户订单明显缩减", position: 0 }],
+      insert: [],
+      remove: ["a"],
+    });
   });
 
   it("已触发的条件不能删除，也不能改写（否则不写复核就能绕过暂停）", () => {

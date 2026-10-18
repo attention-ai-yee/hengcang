@@ -295,6 +295,8 @@ export const thesisBreakers = sqliteTable(
     id: text("id").primaryKey(),
     thesisId: text("thesis_id").notNull().references(() => holdingTheses.id, { onDelete: "cascade" }),
     description: text("description").notNull(),
+    /** 表单里的顺序（从 0 起）。同一次保存的条目 createdAt 相同，不能靠它排序 */
+    position: integer("position").notNull().default(0),
     /** ACTIVE：监控中；TRIGGERED：已被事件触发，等待复核 */
     status: text("status").notNull().default("ACTIVE"),
     triggeredAt: text("triggered_at"),

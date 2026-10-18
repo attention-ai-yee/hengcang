@@ -48,29 +48,30 @@ export function reviewDue(input: { lastReviewOn: string | null; thesisCreatedAt:
 
 /**
  * 保存失效条件时的变更计划：已触发的条件不能被删除或改写——否则不写复核就能绕过暂停。
- * 返回要更新、新增、删除的条目；违反规则时返回 error。
+ * 顺序以提交顺序为准（position = 下标）；已触发的条件可以只改顺序。
+ * 返回要更新（内容或顺序变了）、新增、删除的条目；违反规则时返回 error。
  */
 export function planBreakerChanges(
-  existing: Array<{ id: string; description: string; status: string }>,
+  existing: Array<{ id: string; description: string; status: string; position: number }>,
   submitted: Array<{ id?: string; description: string }>,
 ):
-  | { ok: true; update: Array<{ id: string; description: string }>; insert: string[]; remove: string[] }
+  | { ok: true; update: Array<{ id: string; description: string; position: number }>; insert: Array<{ description: string; position: number }>; remove: string[] }
   | { ok: false; error: "UNKNOWN_BREAKER" | "BREAKER_TRIGGERED"; breakerId: string } {
   const byId = new Map(existing.map((breaker) => [breaker.id, breaker]));
   const kept = new Set<string>();
-  const update: Array<{ id: string; description: string }> = [];
-  const insert: string[] = [];
-  for (const item of submitted) {
+  const update: Array<{ id: string; description: string; position: number }> = [];
+  const insert: Array<{ description: string; position: number }> = [];
+  for (const [position, item] of submitted.entries()) {
     if (!item.id) {
-      insert.push(item.description);
+      insert.push({ description: item.description, position });
       continue;
     }
     const current = byId.get(item.id);
     if (!current) return { ok: false, error: "UNKNOWN_BREAKER", breakerId: item.id };
     kept.add(item.id);
-    if (current.description === item.description) continue;
-    if (current.status === "TRIGGERED") return { ok: false, error: "BREAKER_TRIGGERED", breakerId: item.id };
-    update.push({ id: item.id, description: item.description });
+    const rewritten = current.description !== item.description;
+    if (rewritten && current.status === "TRIGGERED") return { ok: false, error: "BREAKER_TRIGGERED", breakerId: item.id };
+    if (rewritten || current.position !== position) update.push({ id: item.id, description: item.description, position });
   }
   const remove = existing.filter((breaker) => !kept.has(breaker.id));
   const triggeredRemoval = remove.find((breaker) => breaker.status === "TRIGGERED");

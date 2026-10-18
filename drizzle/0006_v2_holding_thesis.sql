@@ -14,6 +14,7 @@ CREATE TABLE `thesis_breakers` (
 	`id` text PRIMARY KEY NOT NULL,
 	`thesis_id` text NOT NULL,
 	`description` text NOT NULL,
+	`position` integer DEFAULT 0 NOT NULL,
 	`status` text DEFAULT 'ACTIVE' NOT NULL,
 	`triggered_at` text,
 	`triggered_by_event_id` text,

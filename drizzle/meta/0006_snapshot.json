@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "dddf4ff5-303c-4797-b079-3607fbc00d22",
+  "id": "e73d1043-1901-49c1-88b8-996b8a7f557f",
   "prevId": "cef10a86-6a21-471d-86f7-3d4456701492",
   "tables": {
     "allocation_targets": {
@@ -1835,6 +1835,14 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         },
         "status": {
           "name": "status",

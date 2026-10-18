@@ -82,7 +82,10 @@ describe("投资逻辑与失效条件", () => {
     });
     expect(status).toBe(200);
     expect(json.data?.status).toBe("INTACT");
-    expect((json.data?.breakers as Array<{ status: string }>).map((breaker) => breaker.status)).toEqual(["ACTIVE", "ACTIVE"]);
+    const breakers = json.data?.breakers as Array<{ description: string; status: string }>;
+    // 同一次保存的条目 createdAt 相同：顺序必须来自 position，而不是随机 id
+    expect(breakers.map((breaker) => breaker.description)).toEqual(["锂电设备行业资本开支同比下滑超过 30%", "最大客户订单明显缩减"]);
+    expect(breakers.map((breaker) => breaker.status)).toEqual(["ACTIVE", "ACTIVE"]);
   });
 
   it("消息对应失效条件 → 触发、暂停新增，并写 WARNING 信号", async () => {
@@ -118,7 +121,8 @@ describe("投资逻辑与失效条件", () => {
       breakers: [{ id: capex.id, description: "锂电设备行业资本开支同比下滑超过 25%" }, { id: customer.id, description: customer.description }, { description: "毛利率连续两个季度下滑" }],
     });
     expect(ok.status).toBe(200);
-    expect((ok.json.data?.breakers as unknown[]).length).toBe(3);
+    expect((ok.json.data?.breakers as Array<{ description: string }>).map((breaker) => breaker.description))
+      .toEqual(["锂电设备行业资本开支同比下滑超过 25%", "最大客户订单明显缩减", "毛利率连续两个季度下滑"]);
     expect(ok.json.data?.status).toBe("BREACHED");
   });
 

@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { getDatabase } from "./client";
 import {
   allocationTargets,
@@ -41,6 +41,17 @@ export async function listLatestScores() {
     .from(scoreSnapshots)
     .where(eq(scoreSnapshots.portfolioId, DEFAULT_PORTFOLIO_ID))
     .orderBy(desc(scoreSnapshots.asOf));
+}
+
+/** 某资产桶的最新一条评分快照（决策日志写入时快照当时系统状态）。 */
+export async function getLatestScoreForBucket(assetBucket: string) {
+  return getDatabase()
+    .select()
+    .from(scoreSnapshots)
+    .where(and(eq(scoreSnapshots.portfolioId, DEFAULT_PORTFOLIO_ID), eq(scoreSnapshots.assetBucket, assetBucket)))
+    .orderBy(desc(scoreSnapshots.asOf))
+    .limit(1)
+    .get();
 }
 
 export async function listLatestSignals(limit = 10) {

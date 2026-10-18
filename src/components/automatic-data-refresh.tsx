@@ -3,25 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ScorableAssetBucket } from "@/domain/types";
+import { refreshMarketDataAction } from "@/server/actions/refresh";
+import type { AutomaticRefreshReport } from "@/server/automatic-data-refresh-service";
 import { BUCKET_LABELS } from "@/lib/presentation";
 
-interface BucketReport {
-  bucket: ScorableAssetBucket;
-  proxy: string;
-  symbol: string;
-  observationCount: number;
-  latestAsOf: string | null;
-  scoreSaved: boolean;
-  warnings: string[];
-}
-
-interface RefreshReport {
-  status: "READY" | "DEGRADED" | "ERROR";
-  inserted: number;
-  updated: number;
-  buckets: BucketReport[];
-}
+type RefreshReport = AutomaticRefreshReport;
 
 export function AutomaticDataRefresh({ compact = false }: { compact?: boolean }) {
   const router = useRouter();
@@ -34,10 +20,14 @@ export function AutomaticDataRefresh({ compact = false }: { compact?: boolean })
     setReport(null);
     setMessage("正在从 Tushare 拉取 5 年历史数据并计算评分，通常需要十几秒…");
     try {
-      const response = await fetch("/api/data/refresh", { method: "POST" });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error?.message ?? "自动刷新失败");
-      const data = body.data as RefreshReport;
+      // 走同源 server action：配置 REFRESH_TOKEN 时 API 只接受外部 Bearer 调用，
+      // 浏览器端不持有令牌，直接 fetch API 会 401（复查修复）。
+      const result = await refreshMarketDataAction();
+      if (!result.ok) {
+        setMessage(result.message);
+        return;
+      }
+      const data = result.report;
       setReport(data);
       const scored = data.buckets.filter((bucket) => bucket.scoreSaved).length;
       setMessage(`刷新完成：写入 ${data.inserted} 条、更新 ${data.updated} 条观察值，生成或更新 ${scored} 类资产评分。`);

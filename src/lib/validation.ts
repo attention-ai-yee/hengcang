@@ -55,10 +55,37 @@ export const manualScorePayloadSchema = z.object({
   cheapnessScore: z.number().min(0).max(100),
   fundamentalScore: z.number().int().min(0).max(100),
   trendScore: z.number().int().min(0).max(100),
-  // 不允许未来日期（M9）：未来快照会永久占据榜首
-  asOf: z.iso.date().refine((value) => value <= shanghaiDate(), "评分日期不能是未来（上海时区）"),
-})
+  // 手工评分只作为「今天」的低可信度兜底：过去日期会以 (portfolio,bucket,asOf) upsert
+  // 覆盖同日自动快照并把 candidateState 写进候选链，污染 3 日确认与回测状态（Code Review M9 加严）。
+  asOf: z.iso.date().refine((value) => value === shanghaiDate(), "手工评分只允许记录当天（上海时区）"),
+});
 
 export const reservedCashPayloadSchema = z.object({
   reservedCashMinor: z.string().regex(/^\d+$/),
+});
+
+export const DECISION_ACTIONS = ["ADD", "REDUCE", "HOLD", "PAUSE"] as const;
+export type DecisionAction = (typeof DECISION_ACTIONS)[number];
+
+/** 决策动作的中文文案（表单/列表共用） */
+export const DECISION_ACTION_LABELS: Record<DecisionAction, string> = {
+  ADD: "加仓",
+  REDUCE: "减仓",
+  HOLD: "保持",
+  PAUSE: "暂停新增",
+};
+
+/** 决策动作 → 建议方向；冷却抑制只对 ADD / REDUCE 同方向生效。 */
+export function decisionDirectionForAction(action: DecisionAction): "ADD" | "REDUCE" | "NONE" {
+  if (action === "ADD") return "ADD";
+  if (action === "REDUCE") return "REDUCE";
+  return "NONE";
+}
+
+export const decisionPayloadSchema = z.object({
+  assetBucket: z.enum(ASSET_BUCKETS),
+  action: z.enum(DECISION_ACTIONS),
+  rationale: z.string().trim().min(1, "请填写决策理由").max(500, "决策理由不能超过 500 字"),
+  // 可选；缺省时服务端写入上海当前时间。必须带时区，避免点内时间歧义。
+  decidedAt: z.iso.datetime({ offset: true, error: "决策时间必须是带时区的 ISO 8601 时间" }).optional(),
 });

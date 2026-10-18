@@ -7,6 +7,43 @@
 
 > 总体评价:架构分层清晰(domain 不依赖框架、provider 结构化返回、金额用最小单位字符串 + bigint)、无前视百分位与修订可见性设计认真。但**测试覆盖集中在 domain 纯函数层,而问题最密集的恰是服务编排层、API 边界与评分引擎的边界条件**——下列问题大多没有测试保护。
 
+---
+
+## 2026-10-18 复查与修复状态（最新）
+
+> 上面 2026-08-23 的报告是历史快照，行号、统计和部分结论已经过期（例如 H4 的“HIGH 不可达”在阈值改为 v1.1 的 3 年后已不成立）。本节是当前状态，阅读时请以本节为准。
+
+**当前基线**：`tsc --noEmit` ✅ | `eslint .` ✅ | `next build` ✅ | `vitest run` 33 个文件 / 177 个测试全部通过 ✅（2026-10-18 实测）。
+
+### 本轮已修复
+
+| 问题 | 修复内容 |
+|---|---|
+| worker 启动即退出 | 去掉唯一 timer 的 `unref()`，抽出可测的 `scheduleNextTick`；`pnpm worker` 实测常驻，回归测试断言 `timer.hasRef()` |
+| 增量刷新后财务基本面永久陈旧 | 派生盈利增长跨运行读取 DB 中的 `PRICE_CLOSE`/`PE_TTM` 历史并按 `available_at` 点内配对；TECH 改用 `PE_TTM`（v1.4 已无 forward PE 生产者）；派生为空显式告警 |
+| 引擎没有数据龄期闸门 | 新增 `history.maxObservationAgeDays=180`：最新观察距评估日超限时组件可信度降 LOW（只降级、不改分数） |
+| 单股/主题硬上限未进入决策状态 | `risk.ts` 增加主题聚合与每桶最高风险；评分刷新把硬上限违规注入状态机 → `OVERWEIGHT`（immediate）、`riskSeverity=CRITICAL`；持仓页与信号共用同一套标签 |
+| 冷却/信号/决策日志在生产链路不可达 | 新增 `POST /api/decisions` 与决策表单；记录 ADD/REDUCE 后按日期比较实际生效 7 天冷却；评分刷新在状态变化或硬上限时写入 `signals`（fingerprint 去重，仅最新评估日） |
+| 3 日确认不校验交易日连续 | 确认链改用 `PRICE_CLOSE` 观察日期构建的交易日历校验相邻性；全量回填的月频历史快照跳过逐日确认 |
+| 手工评分可回填过去日期 | `asOf` 收紧为“必须是上海今天”，避免覆盖同日自动快照和污染候选链 |
+| 回测仓位上限量纲错误 | `target` 与 `maxBps/minBps` 统一除以四桶目标合计；默认配置下不再出现 target 超 cap 被迫卖出 |
+| 回测取价绕过点内时间/选源 | 新增 `pickPointInTimePrice`：`availableAt<=评估日` + 手工覆盖/主 Provider/quality/时间戳确定性优先级；新增“顺延前值”告警 |
+| 回测“T+1”口径误导 | 明确为“下一个评估日（月末）收盘成交”，`signalLag=NEXT_EVALUATION_CLOSE`；落库评估网格与评分配置快照 |
+| 回测边界 | 空净值曲线/空网格/单点指标、CLI `worstYear=null` 打印 `0.0%` 等问题修复；页面列名改为“调仓桶次” |
+| 配置 `REFRESH_TOKEN` 后页面按钮必然 401 | 刷新/回测按钮改走同源 server action；API 仍保留 Bearer 校验供外部 cron 使用 |
+
+### 原报告条目现状
+
+- **已修复**：H1、H2、H3、H4、H5、H6、H8、M1、M2、M3、M5、M8、M19、M20，以及大部分 L 项（行号已变，需重新定位）。
+- **部分修复**：H7——派生兜底已能跨运行读 PE 历史、TECH 改用 PE_TTM，但真实财报增量刷新仍未实现（依赖 180 天新鲜度闸门兜底，不会再用陈旧数据输出增配）。
+- **明确保留（未在本次范围）**：WGC 流量的 `availableAt` 仍为保守假设（建议以真实发布日复核）；历史财务/分红稳定性回填仍使用当前成分权重（幸存者偏差，点内历史成分回填待做）；回测为“下一评估日”而非逐日 T+1；设置页的目标仓位/风险上限仍只读；E2E 尚未补齐；Decision Log 的 30/90/180 天结果回填未做。
+
+### 本轮验证方式
+
+`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build` 全部通过；`pnpm worker` 常驻实测；用数据库副本启动生产构建，冒烟验证 dashboard/scores/holdings/backtest/decisions/data-status/settings/onboarding 页面 200、`POST/GET /api/decisions` 正常、配置 `REFRESH_TOKEN` 后刷新/回测 API 返回 401 且页面照常渲染（真实 `data/hengcang.db` 未被写入）。
+
+---
+
 ## 问题统计
 
 | 严重度 | 数量 |

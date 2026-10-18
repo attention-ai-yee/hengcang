@@ -25,7 +25,8 @@
     "highYears": 3,
     "mediumYears": 1,
     "mediumCoverage": 0.6,
-    "highCoverage": 0.8
+    "highCoverage": 0.8,
+    "maxObservationAgeDays": 180
   },
   "portfolio": {
     "baseCurrency": "CNY",

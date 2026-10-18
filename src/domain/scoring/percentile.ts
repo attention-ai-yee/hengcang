@@ -42,10 +42,45 @@ export function fullYearsBetween(from: string, to: string): number {
   return years;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * 最新观察距评估日的天数（数据新鲜度闸门，v1.5）。
+ *
+ * 取 `asOf` 与 `availableAt` 中较晚的日期作为"信息发生/可见"时间：财务报告期
+ * (`asOf`=报告期末) 通常早于公告日 (`availableAt`)，用较晚者才不会把正常的
+ * 季度披露滞后误判为陈旧（180 天阈值对财务/估值/价格统一适用）。
+ * 解析失败或未来日期返回 null（不触发降级）。
+ */
+function observationAgeDays(metric: MetricSeries, evaluationDate: string): number | null {
+  const observedDate = [metric.asOf, metric.availableAt ?? metric.asOf]
+    .map((value) => value.slice(0, 10))
+    .sort()
+    .at(-1) ?? "";
+  const observedMs = Date.parse(`${observedDate}T00:00:00Z`);
+  const evaluationMs = Date.parse(`${evaluationDate.slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(observedMs) || !Number.isFinite(evaluationMs)) return null;
+  return Math.floor((evaluationMs - observedMs) / MS_PER_DAY);
+}
+
+/**
+ * 陈旧数据只降可信度、不改分数：指标最新观察距评估日超过
+ * `history.maxObservationAgeDays` 时返回 true，组件 confidence 降为 LOW。
+ * 组件结果仍保留原始 asOf，可解释为什么被降级。
+ */
+function isStaleObservation(metric: MetricSeries, evaluationDate: string): boolean {
+  const ageDays = observationAgeDays(metric, evaluationDate);
+  return ageDays !== null && ageDays > DEFAULT_SCORING_CONFIG.history.maxObservationAgeDays;
+}
+
 function historyConfidence(metric: MetricSeries, evaluationDate: string): Confidence {
   if (metric.source.toUpperCase().includes("MANUAL")) return "LOW";
   const history = availableHistory(metric, evaluationDate);
   if (history.length === 0) return "LOW";
+  // 数据新鲜度闸门：引擎过去只校验 asOf/availableAt 的时点合法性、不校验"多旧"。
+  // 上游停更时旧值会照常参与打分；这里把组件 confidence 降为 LOW（不改分数），
+  // 由下游 combineComponents/applyRiskRules 封顶状态、避免基于陈旧数据输出增配。
+  if (isStaleObservation(metric, evaluationDate)) return "LOW";
   const earliest = history.reduce((min, point) => (point.asOf < min ? point.asOf : min), history[0].asOf);
   const years = fullYearsBetween(earliest, evaluationDate);
   if (years < DEFAULT_SCORING_CONFIG.history.mediumYears) return "LOW";

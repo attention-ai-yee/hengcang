@@ -1,4 +1,4 @@
-import type { Confidence, RecommendationState, ScorableAssetBucket } from "../types";
+import type { Confidence, RecommendationState, RiskSeverity, ScorableAssetBucket } from "../types";
 import type { RecommendationDirection } from "./state";
 
 export interface HistoricalObservation {
@@ -120,11 +120,24 @@ export type AssetModelInput = ValueDividendInput | TechGrowthInput | BroadEquity
 export interface ScoreRiskContext {
   currentWeightBps?: number;
   positionLimitBps?: number;
+  /**
+   * 该资产桶内任一持仓/主题严格超过单股 8% / 主题 ETF 15% / 主题 20% 硬上限。
+   * 硬上限违规是组合层面的即时风险，优先于普通桶超配与低可信度。
+   */
+  hardLimitExceeded?: boolean;
+  /** 具体违规标签，写进 OVERWEIGHT 原因与信号摘要 */
+  hardLimitLabel?: string;
   confidenceOverride?: Confidence;
   previousState?: RecommendationState;
   candidateHistory?: RecommendationState[];
   /** 与 candidateHistory 一一对应的快照日期（YYYY-MM-DD），用于按不同交易日计数确认 */
   candidateHistoryDates?: string[];
+  /**
+   * 升序、去重的已知交易日（YYYY-MM-DD）。提供且非空时，连续 N 个交易日确认
+   * 改为严格校验：当前评估日必须是交易日，且最近 required 个快照日期在日历中
+   * 连续相邻；断档/周末/月度回填不再能凑足确认天数。
+   */
+  tradingDates?: string[];
   lastDecisionDirection?: Exclude<RecommendationDirection, "NONE">;
   lastDecisionAt?: string;
 }
@@ -143,6 +156,10 @@ export interface ScoreResult {
   signalSuppressed: boolean;
   allowAdd: boolean;
   forceSell: false;
+  /** 硬上限违规 CRITICAL；REASSESS/桶超配 WARNING；LOW_CONFIDENCE WATCH；其余 INFO */
+  riskSeverity: RiskSeverity;
+  hardLimitExceeded: boolean;
+  hardLimitLabel: string | null;
   components: Record<string, ScoreComponentResult>;
   missingMetrics: string[];
   reasons: string[];

@@ -1,7 +1,8 @@
 import { and, asc, eq, inArray, lte } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { DEFAULT_PORTFOLIO_ID } from "@/db/queries";
-import { allocationTargets, backtestResults, backtestRuns, metricObservations, scoreSnapshots } from "@/db/schema";
+import { allocationTargets, backtestResults, backtestRuns, configSnapshots, metricObservations, scoreSnapshots } from "@/db/schema";
+import { DEFAULT_SCORING_CONFIG } from "@/domain/scoring";
 import type { RecommendationState, ScorableAssetBucket } from "@/domain/types";
 
 /** 回测只覆盖四只参与评分的资产桶（现金/其他桶不参与权益模拟）。 */
@@ -60,20 +61,24 @@ export interface NormalizedTargets {
 export function normalizedTargets(targets: TargetInput[]): NormalizedTargets {
   const scoped = targets.filter((item) => (BACKTEST_BUCKETS as readonly string[]).includes(item.assetBucket));
   const sum = scoped.reduce((acc, item) => acc + item.targetBps, 0);
+  const target: Record<string, number> = {};
   const limitMax: Record<string, number> = {};
   const limitMin: Record<string, number> = {};
-  const target: Record<string, number> = {};
-  // 上限/下限独立于目标权重读取：即使 targetBps 合计为 0，maxBps/minBps 仍然有效。
-  for (const item of scoped) {
-    if (item.maxBps > 0) limitMax[item.assetBucket] = item.maxBps / 10000;
-    if (item.minBps > 0) limitMin[item.assetBucket] = item.minBps / 10000;
-  }
   if (sum <= 0) {
+    // 四桶目标合计为 0：等权兜底。此时没有归一化分母，maxBps/minBps（总资产 bps 口径）
+    // 无法换算到归一权重空间，直接下发会与等权 target 不同量纲（15% 上限会误钳 25% 等权桶），
+    // 因此兜底分支不提供上限/下限——上限不可用，而不是拿错量纲的数值硬钳。
     const equal = 1 / BACKTEST_BUCKETS.length;
     for (const bucket of BACKTEST_BUCKETS) target[bucket] = equal;
     return { target, limitMax, limitMin, fallback: true };
   }
-  for (const item of scoped) target[item.assetBucket] = item.targetBps / sum;
+  // target 按四桶 targetBps 之和归一到 100%，上限/下限必须除以同一分母换算到同一空间，
+  // 否则会把「总资产 bps」直接当成「归一权重」比较（量纲不一致 bug）。
+  for (const item of scoped) {
+    target[item.assetBucket] = item.targetBps / sum;
+    if (item.maxBps > 0) limitMax[item.assetBucket] = item.maxBps / sum;
+    if (item.minBps > 0) limitMin[item.assetBucket] = item.minBps / sum;
+  }
   return { target, limitMax, limitMin, fallback: false };
 }
 
@@ -224,7 +229,12 @@ export interface EquityPoint { date: string; nav: number; }
  * 组合净值模拟：按 bucket 每期收益加权；rebalance(i, driftedWeights) 返回新权重时收取换手成本
  * （成本 = 成交比列 × costBps）。rebalance 返回的目标自本期末生效，
  * 即赚取 dates[i] -> dates[i+1] 区间收益；信号类策略应在回调里读 dates[i-1]
- * 的快照（T+1：上一评估日产生信号，本评估日收盘成交）。
+ * 的快照——月频评估网格下即上一评估日（月末）产生信号、本评估日（月末）收盘成交，
+ * 不是逐日 T+1。
+ *
+ * 交易口径（供结果解释，勿按字面当成「成交笔数」）：
+ * - tradeCount = 各再平衡期权重变动超过 1e-4 的桶数之和，即「调仓桶次」；
+ * - turnoverBps = 各期 Σ|Δw|（买卖双边成交比列）的 bps 累计。
  */
 export function simulateEquity(
   dates: string[],
@@ -233,6 +243,8 @@ export function simulateEquity(
   rebalance: ((index: number, driftedWeights: Record<string, number>) => Record<string, number> | null) | null,
   costBps: number,
 ): { equity: EquityPoint[]; tradeCount: number; turnoverBps: number } {
+  // 空网格没有任何可模拟区间：返回空曲线而不是访问 dates[0] 生成残缺点。
+  if (dates.length === 0) return { equity: [], tradeCount: 0, turnoverBps: 0 };
   let nav = 1;
   let weights = { ...initialWeights };
   const equity: EquityPoint[] = [{ date: dates[0], nav }];
@@ -286,6 +298,10 @@ function calendarDaysBetween(from: string, to: string): number {
  * 净值曲线指标。波动率/夏普按实测平均区间长度年化（365.25 / 平均日间隔），
  * 不假设固定月度间距——增量刷新会混入非月末采样日，硬编码 sqrt(12) 会失真。
  * 最长回撤期 = 峰值到修复（或序列末日）的最长历时天数。
+ * 空曲线返回全零指标（无区间可计算，不能因 equity[0] 缺失抛 TypeError）；
+ * 单点曲线只有期初净值，收益/回撤/波动均为 0、最差年度为 null。
+ * 交易口径不在本函数内：tradeCount（调仓桶次）与 turnoverBps（买卖双边 Σ|Δw| 累计）
+ * 由 simulateEquity 产出并写入回测结果。
  */
 export interface EquityMetrics {
   totalReturnBps: number;
@@ -299,6 +315,16 @@ export interface EquityMetrics {
 }
 
 export function metricsFromEquity(equity: EquityPoint[]): EquityMetrics {
+  const empty: EquityMetrics = {
+    totalReturnBps: 0,
+    cagrBps: 0,
+    maxDrawdownBps: 0,
+    volatilityBps: 0,
+    sharpeMilli: 0,
+    worstYearBps: null,
+    longestDrawdownDays: 0,
+  };
+  if (equity.length === 0) return empty;
   const first = equity[0];
   const last = equity[equity.length - 1];
   const totalReturn = last.nav - first.nav;
@@ -408,7 +434,8 @@ export interface RebalanceContext {
 
 /**
  * 策略 -> 再平衡回调。信号类策略滞后一格：index i 读 dates[i-1] 的快照，
- * 在 dates[i] 收盘成交（规格 §14「下一可交易时点执行」）。
+ * 在 dates[i] 收盘成交（规格 §14「下一可交易时点执行」）。当前网格是月频评估日，
+ * 因此成交时点是「下一个评估日（月末）收盘」，不是逐日 T+1。
  */
 export function buildRebalance(
   strategyKey: StrategyKey,
@@ -443,7 +470,7 @@ export interface BacktestInput {
   now?: string;
 }
 
-/** 一次跑完六种策略并落库（同一批次号）。信号类策略读上一评估日快照：T+1 执行。 */
+/** 一次跑完六种策略并落库（同一批次号）。信号类策略读上一评估日快照：信号在下一个评估日（月末）收盘成交。 */
 export async function runAllBacktests(input: BacktestInput): Promise<BacktestSummary[]> {
   const db = getDatabase();
   const { dates, bucketReturns, opportunityByDate, statesByDate } = input;
@@ -462,7 +489,16 @@ export async function runAllBacktests(input: BacktestInput): Promise<BacktestSum
   };
 
   const summaries: BacktestSummary[] = [];
+  // 可追溯性：本次批次使用的评分配置与评估网格随运行记录落库，事后可复现口径。
+  const configSnapshotId = crypto.randomUUID();
   db.transaction((tx) => {
+    tx.insert(configSnapshots).values({
+      id: configSnapshotId,
+      portfolioId: DEFAULT_PORTFOLIO_ID,
+      version: DEFAULT_SCORING_CONFIG.version,
+      configJson: JSON.stringify(DEFAULT_SCORING_CONFIG),
+      createdAt: now,
+    }).run();
     for (const strategy of STRATEGIES) {
       const rebalance = buildRebalance(strategy.key, context);
       const { equity, tradeCount, turnoverBps } = simulateEquity(dates, bucketReturns, { ...targetWeights }, rebalance, costBps);
@@ -482,10 +518,12 @@ export async function runAllBacktests(input: BacktestInput): Promise<BacktestSum
           targets: targetWeights,
           limits: { max: limitMax, min: limitMin },
           targetsFallback: fallback,
-          signalLag: "T+1_NEXT_GRID_CLOSE",
+          signalLag: "NEXT_EVALUATION_CLOSE",
+          evaluationGrid: dates,
           costBps,
           warnings: input.warnings ?? [],
         }),
+        configSnapshotId,
         startedAt: now,
         completedAt: now,
         createdAt: now,
@@ -527,7 +565,64 @@ export async function runAllBacktests(input: BacktestInput): Promise<BacktestSum
   return summaries;
 }
 
-/** 从数据库组装回测输入（点内时间：评分快照公共评估日网格 + PRICE_CLOSE 前值收益 + 已确认状态）。 */
+/** PRICE_CLOSE 观测中参与点内取价的字段（与 DB 行解耦，便于纯函数单测）。 */
+export interface PriceObservationRow {
+  id: string;
+  asOf: string;
+  availableAt: string;
+  fetchedAt: string;
+  provider: string;
+  quality: string;
+  isManualOverride: boolean;
+  value: number;
+}
+
+export interface PointInTimePrice {
+  asOf: string;
+  value: number;
+}
+
+/**
+ * 同一 asOf 多行时的确定性取价优先级：
+ * 手工覆盖 > provider='tushare' > quality='VALID' > availableAt 更晚 > fetchedAt 更晚 > id 字典序（小者优先）。
+ */
+function isPreferredPriceRow(candidate: PriceObservationRow, existing: PriceObservationRow): boolean {
+  if (candidate.isManualOverride !== existing.isManualOverride) return candidate.isManualOverride;
+  const candidatePrimary = candidate.provider === "tushare";
+  const existingPrimary = existing.provider === "tushare";
+  if (candidatePrimary !== existingPrimary) return candidatePrimary;
+  const candidateValid = candidate.quality === "VALID";
+  const existingValid = existing.quality === "VALID";
+  if (candidateValid !== existingValid) return candidateValid;
+  if (candidate.availableAt !== existing.availableAt) return candidate.availableAt > existing.availableAt;
+  if (candidate.fetchedAt !== existing.fetchedAt) return candidate.fetchedAt > existing.fetchedAt;
+  return candidate.id < existing.id;
+}
+
+/**
+ * 点内取价（纯函数）：只用「asOf ≤ date 且 availableAt 的日期部分 ≤ date」的观测——
+ * 前者防止读到未来数据，后者防止把收盘后/次日才发布的修订提前使用。
+ * 同一 asOf 可能有多行（多 provider、修订、手工覆盖），按 isPreferredPriceRow 的
+ * 确定性优先级选一行；最终返回 asOf 最大的那一行（date 时点的最后前值）。
+ * 完全没有可用价格返回 null（由调用方决定按 0% 处理并显式告警）。
+ */
+export function pickPointInTimePrice(rows: PriceObservationRow[], date: string): PointInTimePrice | null {
+  const selected = new Map<string, PriceObservationRow>();
+  for (const row of rows) {
+    if (row.asOf > date) continue;
+    if (row.availableAt.slice(0, 10) > date) continue;
+    if (!Number.isFinite(row.value)) continue;
+    const existing = selected.get(row.asOf);
+    if (!existing || isPreferredPriceRow(row, existing)) selected.set(row.asOf, row);
+  }
+  let latest: PriceObservationRow | null = null;
+  for (const row of selected.values()) {
+    if (!latest || row.asOf > latest.asOf) latest = row;
+  }
+  return latest ? { asOf: latest.asOf, value: latest.value } : null;
+}
+
+/** 从数据库组装回测输入（点内时间：评分快照公共评估日网格 + 点内取价的 PRICE_CLOSE 收益 + 已确认状态）。 */
 export async function loadBacktestInput(): Promise<BacktestInput> {
   const db = getDatabase();
   const targetRows = db.select().from(allocationTargets).where(eq(allocationTargets.portfolioId, DEFAULT_PORTFOLIO_ID)).all();
@@ -556,44 +651,63 @@ export async function loadBacktestInput(): Promise<BacktestInput> {
   const dates = coalesceToMonthEnd(commonDates);
   if (dates.length < 2) throw new Error("历史评分快照不足（需至少 2 个公共评估日）");
   const priceRows = db.select({
+    id: metricObservations.id,
     asOf: metricObservations.asOf,
     bucket: metricObservations.subjectId,
     value: metricObservations.value,
+    provider: metricObservations.provider,
+    quality: metricObservations.quality,
+    availableAt: metricObservations.availableAt,
+    fetchedAt: metricObservations.fetchedAt,
+    isManualOverride: metricObservations.isManualOverride,
   }).from(metricObservations).where(and(
+    eq(metricObservations.subjectType, "ASSET_BUCKET"),
     eq(metricObservations.metricKey, "PRICE_CLOSE"),
     inArray(metricObservations.subjectId, BACKTEST_BUCKETS),
+    // 点内纪律：只用可用质量的价格（VALID/PARTIAL），不收 SUSPECT/INVALID 等脏观测。
+    inArray(metricObservations.quality, ["VALID", "PARTIAL"]),
     lte(metricObservations.asOf, dates[dates.length - 1]),
   )).orderBy(asc(metricObservations.asOf)).all();
-  const prices = new Map<string, Array<{ asOf: string; value: number }>>();
+  const prices = new Map<string, PriceObservationRow[]>();
   for (const bucket of BACKTEST_BUCKETS) prices.set(bucket, []);
-  for (const row of priceRows) prices.get(row.bucket)?.push({ asOf: row.asOf, value: Number(row.value) });
-  const priceAt = (bucket: string, date: string): number | null => {
-    const series = prices.get(bucket) ?? [];
-    let best: number | null = null;
-    for (const point of series) {
-      if (point.asOf > date) break;
-      best = point.value;
-    }
-    return best;
-  };
+  for (const row of priceRows) {
+    prices.get(row.bucket)?.push({
+      id: row.id,
+      asOf: row.asOf,
+      availableAt: row.availableAt,
+      fetchedAt: row.fetchedAt,
+      provider: row.provider,
+      quality: row.quality,
+      isManualOverride: row.isManualOverride,
+      value: Number(row.value),
+    });
+  }
   const warnings: string[] = [];
   const bucketReturns: Record<string, number[]> = {};
   for (const bucket of BACKTEST_BUCKETS) {
+    const series = prices.get(bucket) ?? [];
     const returns: number[] = [];
     let missingIntervals = 0;
+    let carriedForwardIntervals = 0;
     for (let i = 1; i < dates.length; i += 1) {
-      const previous = priceAt(bucket, dates[i - 1]);
-      const current = priceAt(bucket, dates[i]);
-      if (previous === null || current === null || previous <= 0) {
+      const previous = pickPointInTimePrice(series, dates[i - 1]);
+      const current = pickPointInTimePrice(series, dates[i]);
+      if (previous === null || current === null || previous.value <= 0) {
         // 序列起点晚于回测起点或端点缺价：按 0% 处理但必须显式告警，不允许静默。
         missingIntervals += 1;
         returns.push(0);
         continue;
       }
-      returns.push(current / previous - 1);
+      // 端点价格不是评估日当天观测 = 使用了「评估日之前的顺延前值」（评估日为非交易日时
+      // 取最近收盘价是正确行为，但会平滑区间收益，单独计数以便审计）。
+      if (previous.asOf !== dates[i - 1] || current.asOf !== dates[i]) carriedForwardIntervals += 1;
+      returns.push(current.value / previous.value - 1);
     }
     if (missingIntervals > 0) {
       warnings.push(`${bucket} 有 ${missingIntervals} 个评估区间缺少 PRICE_CLOSE，已按 0% 收益处理`);
+    }
+    if (carriedForwardIntervals > 0) {
+      warnings.push(`${bucket} 有 ${carriedForwardIntervals} 个评估区间使用了评估日之前的 PRICE_CLOSE 顺延前值`);
     }
     bucketReturns[bucket] = returns;
   }

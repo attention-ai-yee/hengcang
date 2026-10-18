@@ -4,7 +4,7 @@ import { DEFAULT_PORTFOLIO_ID, getPortfolioRecord, getRiskLimits, listAllocation
 import { holdings, portfolios } from "@/db/schema";
 
 import { summarizePortfolio } from "@/domain/portfolio";
-import { evaluateHoldingRisk } from "@/domain/risk";
+import { aggregateThemeRisks, evaluateHoldingRisk } from "@/domain/risk";
 import type { AssetBucket, HoldingInput } from "@/domain/types";
 import type { z } from "zod";
 import type { holdingPatchSchema, holdingPayloadSchema } from "@/lib/validation";
@@ -36,6 +36,11 @@ function ensureDefaultPortfolio(now: string): void {
   }
 }
 
+/** 决策日志等写路径复用：新库第一次写入前先补齐默认组合行（外键依赖）。 */
+export function ensureDefaultPortfolioRecord(now = new Date().toISOString()): void {
+  ensureDefaultPortfolio(now);
+}
+
 export async function getPortfolioView() {
   const [rows, targets, portfolio, limits] = await Promise.all([
     listHoldings(),
@@ -61,25 +66,46 @@ export async function getPortfolioView() {
   // 单股/主题 ETF 硬上限（Code Review H6）：以可投资资产为分母逐持仓评估，
   // 超配 → OVERWEIGHT/WARNING；恰好到达上限（无法再增）→ WATCH。
   const denominator = summary.investableAssetsMinor;
+  const riskLimits = {
+    singleStockBps: limits?.singleStockBps ?? 800,
+    thematicEtfBps: limits?.thematicEtfBps ?? 1500,
+    themeBps: limits?.themeBps ?? 2000,
+  };
   const holdingRisks = rows.map((row) => ({
     id: row.id,
     name: row.name,
+    assetBucket: row.assetBucket,
     ...evaluateHoldingRisk({
+      name: row.name,
       holdingValueMinor: BigInt(row.marketValueMinor),
       portfolioValueMinor: summary.investableAssetsMinor,
       isSingleStock: row.isSingleStock,
       isThematicEtf: row.isThematicEtf,
-      limits: {
-        singleStockBps: limits?.singleStockBps ?? 800,
-        thematicEtfBps: limits?.thematicEtfBps ?? 1500,
-      },
+      limits: riskLimits,
     }),
     weightBps: denominator > 0n ? Number(((investableByHolding.get(row.id) ?? BigInt(row.marketValueMinor)) * 10_000n) / denominator) : 0,
   }));
+  // 主题聚合（同一 theme 的持仓合计 vs themeBps）与每桶最高风险摘要，
+  // 供评分状态机把「该桶任一持仓/主题触发硬上限」接进 OVERWEIGHT 即时态。
+  const aggregateRisks = aggregateThemeRisks({
+    portfolioValueMinor: summary.investableAssetsMinor,
+    limits: riskLimits,
+    holdings: rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      assetBucket: row.assetBucket,
+      theme: row.theme,
+      holdingValueMinor: BigInt(row.marketValueMinor),
+      isSingleStock: row.isSingleStock,
+      isThematicEtf: row.isThematicEtf,
+    })),
+  });
   return {
     holdings: rows,
     targets,
     holdingRisks,
+    themeRisks: aggregateRisks.themeRisks,
+    bucketRisks: aggregateRisks.bucketRisks,
     summary: {
       totalValueMinor: summary.totalValueMinor.toString(),
       reservedCashMinor: summary.reservedCashMinor.toString(),

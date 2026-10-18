@@ -1,4 +1,4 @@
-import type { Confidence, RecommendationState, ScorableAssetBucket } from "../types";
+import type { Confidence, RecommendationState, RiskSeverity, ScorableAssetBucket } from "../types";
 import { DEFAULT_SCORING_CONFIG, assertScoringConfig, type ScoringConfig } from "./config";
 import { combineComponents, calculateModelSubscores } from "./models";
 import { clampScore, round1 } from "./percentile";
@@ -34,6 +34,8 @@ export function applyRiskRules(input: {
   confidence: Confidence;
   currentWeightBps?: number;
   positionLimitBps?: number;
+  hardLimitExceeded?: boolean;
+  hardLimitLabel?: string;
   config?: ScoringConfig;
 }): { state: RecommendationState; allowAdd: boolean; forceSell: false; reasons: string[]; immediate: boolean } {
   const config = input.config ?? DEFAULT_SCORING_CONFIG;
@@ -51,12 +53,21 @@ export function applyRiskRules(input: {
     reasons.push(`基本面分低于 ${config.thresholds.fundamentalCircuitBreaker}，暂停新增并重新评估投资逻辑`);
     return { state: "REASSESS_THESIS", allowAdd: false, forceSell: false, reasons, immediate: true };
   }
-  if (
+  // 硬上限违规（组合层面的单股/主题约束）与桶超配同为 OVERWEIGHT 即时态：
+  // 优先级 REASSESS_THESIS > OVERWEIGHT > LOW_CONFIDENCE（基本面熔断先判）。
+  const bucketOverweight =
     input.currentWeightBps !== undefined &&
     input.positionLimitBps !== undefined &&
-    input.currentWeightBps > input.positionLimitBps
-  ) {
-    reasons.push("当前仓位严格超过适用上限：停止新增，不强制卖出");
+    input.currentWeightBps > input.positionLimitBps;
+  if (input.hardLimitExceeded === true || bucketOverweight) {
+    if (input.hardLimitExceeded === true) {
+      reasons.push(
+        input.hardLimitLabel
+          ? `触发硬上限：${input.hardLimitLabel}；停止新增，不强制卖出`
+          : "触发单股/主题硬上限：停止新增，不强制卖出",
+      );
+    }
+    if (bucketOverweight) reasons.push("当前仓位严格超过适用上限：停止新增，不强制卖出");
     return { state: "OVERWEIGHT", allowAdd: false, forceSell: false, reasons, immediate: true };
   }
   if (input.opportunityScore === null || input.fundamentalScore === null || input.confidence === "LOW") {
@@ -132,6 +143,8 @@ export function calculateAssetScore(
     confidence,
     currentWeightBps: risk.currentWeightBps,
     positionLimitBps: risk.positionLimitBps,
+    hardLimitExceeded: risk.hardLimitExceeded,
+    hardLimitLabel: risk.hardLimitLabel,
     config,
   });
 
@@ -159,6 +172,8 @@ export function calculateAssetScore(
         candidateState: gated.state,
         candidateHistory: risk.candidateHistory ?? [],
         candidateHistoryDates: risk.candidateHistoryDates,
+        tradingDates: risk.tradingDates,
+        asOf: input.asOf,
         immediate: gated.immediate,
         confirmationTradingDays: config.signalRules.confirmationTradingDays,
       })
@@ -179,6 +194,15 @@ export function calculateAssetScore(
     ...Object.fromEntries(Object.entries(subscores.fundamental.components).map(([key, value]) => [`fundamental.${key}`, value])),
     ...Object.fromEntries(Object.entries(subscores.trend.components).map(([key, value]) => [`trend.${key}`, value])),
   };
+  const hardLimitExceeded = risk.hardLimitExceeded === true;
+  // 风险严重度：硬上限违规 = CRITICAL；重新评估/超配 = WARNING；低可信度 = WATCH；其余 INFO。
+  const riskSeverity: RiskSeverity = hardLimitExceeded
+    ? "CRITICAL"
+    : confirmation.state === "REASSESS_THESIS" || confirmation.state === "OVERWEIGHT"
+      ? "WARNING"
+      : confirmation.state === "LOW_CONFIDENCE"
+        ? "WATCH"
+        : "INFO";
   return {
     bucket: input.bucket,
     asOf: input.asOf,
@@ -193,6 +217,9 @@ export function calculateAssetScore(
     signalSuppressed,
     allowAdd: gated.allowAdd && confirmation.confirmed && !signalSuppressed,
     forceSell: false,
+    riskSeverity,
+    hardLimitExceeded,
+    hardLimitLabel: hardLimitExceeded ? (risk.hardLimitLabel ?? null) : null,
     components,
     missingMetrics: [
       ...subscores.cheapness.missingMetrics.map((key) => `cheapness.${key}`),

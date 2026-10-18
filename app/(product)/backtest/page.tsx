@@ -43,7 +43,7 @@ function RunTable({ runs }: { runs: RunRow[] }) {
         <thead>
           <tr>
             <th>策略</th><th>区间</th><th>总收益</th><th>年化</th><th>最大回撤</th><th>最差年度</th>
-            <th>最长回撤期</th><th>波动率</th><th>夏普</th><th>换手(bps)</th><th>交易次数</th><th>完成时间</th>
+            <th>最长回撤期</th><th>波动率</th><th>夏普</th><th>换手(bps)</th><th>调仓桶次</th><th>完成时间</th>
           </tr>
         </thead>
         <tbody>{runs.map((run) => (<tr key={run.id}>
@@ -84,7 +84,7 @@ export default async function BacktestPage() {
 
   return (
     <>
-      <PageIntro eyebrow="Point-in-time backtest" title="策略回测" description="点内时间回测：评分只用当时已发布的数据，信号在下一评估日收盘成交（T+1），并计入交易成本。" />
+      <PageIntro eyebrow="Point-in-time backtest" title="策略回测" description="点内时间回测：评分只用当时已发布的数据，信号在下一个评估日（月末）收盘成交，并计入交易成本。" />
       <section className="mb-5 grid gap-4 md:grid-cols-3">
         {[
           ["基准", "持有基准 / 固定比例再平衡（月度与季度）"],
@@ -97,7 +97,7 @@ export default async function BacktestPage() {
           <div>
             <h2 className="font-semibold">历史运行</h2>
             <p className="mt-1 text-sm text-[#68756e]">月度公共评估日网格 · 交易成本假设 {latestInputs.costBps ?? 10}bps
-              {" "}· 指标：总收益 / 年化 / 最大回撤 / 最差年度 / 最长回撤期 / 波动率 / 夏普 / 换手 / 交易次数</p>
+              {" "}· 指标：总收益 / 年化 / 最大回撤 / 最差年度 / 最长回撤期 / 波动率 / 夏普 / 换手 / 调仓桶次</p>
           </div>
           <BacktestRunner />
         </div>

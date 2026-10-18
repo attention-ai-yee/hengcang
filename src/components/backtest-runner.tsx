@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { runBacktestAction } from "@/server/actions/backtest";
 
 export function BacktestRunner() {
   const router = useRouter();
@@ -11,10 +12,10 @@ export function BacktestRunner() {
     setBusy(true);
     setMessage(null);
     try {
-      const response = await fetch("/api/backtest/run", { method: "POST" });
-      const body = (await response.json()) as { data?: unknown; error?: { message?: string } };
-      if (!response.ok) {
-        setMessage(body?.error?.message ?? "回测失败");
+      // 与刷新一致：走同源 server action，避免配置 REFRESH_TOKEN 后按钮必然 401。
+      const result = await runBacktestAction();
+      if (!result.ok) {
+        setMessage(result.message);
         return;
       }
       router.refresh();

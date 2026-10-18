@@ -39,13 +39,15 @@ if (persist) {
   }
 }
 
-console.log("\n策略                  总收益    年化   最大回撤  最差年度  最长回撤期   波动率    夏普  换手(bps)  交易次数");
+console.log("\n策略                  总收益    年化   最大回撤  最差年度  最长回撤期   波动率    夏普  换手(bps)  调仓桶次");
 for (const strategy of STRATEGIES) {
-  // 与服务层共用 buildRebalance：信号滞后一格，dates[i] 收盘成交 dates[i-1] 的信号（T+1）。
+  // 与服务层共用 buildRebalance：信号滞后一格，dates[i] 收盘成交 dates[i-1] 的信号
+  //（月频网格下即「下一个评估日（月末）收盘成交」，不是逐日 T+1）。
   const rebalance = buildRebalance(strategy.key, { dates: input.dates, opportunityByDate: input.opportunityByDate, statesByDate: input.statesByDate, target, limitMax, limitMin });
   const { equity, tradeCount, turnoverBps } = simulateEquity(input.dates, input.bucketReturns, { ...target }, rebalance, costBps);
   const metrics = metricsFromEquity(equity);
-  const pct = (bps: number | null) => `${(bps! / 100).toFixed(1)}%`.padStart(7);
+  // null 指标（如单点曲线无最差年度）必须打印「—」，不能按 0 值打成 0.0% 误导。
+  const pct = (bps: number | null) => (bps === null ? "—" : `${(bps / 100).toFixed(1)}%`).padStart(7);
   console.log(
     strategy.cn.padEnd(18),
     pct(metrics.totalReturnBps),

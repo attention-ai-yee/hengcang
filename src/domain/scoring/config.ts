@@ -18,6 +18,8 @@ export interface ScoringConfig {
     mediumYears: number;
     mediumCoverage: number;
     highCoverage: number;
+    /** 数据新鲜度上限：指标最新观察（asOf 与 availableAt 较晚者）距评估日超过该天数时，组件可信度降为 LOW（不改分数）。 */
+    maxObservationAgeDays: number;
   };
   portfolio: { baseCurrency: string; reservedCash: number };
   componentWeights: typeof defaults.componentWeights;
@@ -41,6 +43,9 @@ export function assertScoringConfig(config: ScoringConfig): void {
   }
   if (!(config.history.highCoverage >= config.history.mediumCoverage && config.history.mediumCoverage > 0)) {
     throw new Error("可信度覆盖率阈值无效");
+  }
+  if (!(Number.isFinite(config.history.maxObservationAgeDays) && config.history.maxObservationAgeDays > 0)) {
+    throw new Error("数据新鲜度阈值必须为正数");
   }
 
   function validateWeightGroups(value: unknown, path: string): void {

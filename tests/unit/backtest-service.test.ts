@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_ALLOCATION_BANDS } from "@/domain/settings";
 import {
+  BACKTEST_BUCKETS,
   buildRebalance,
   coalesceToMonthEnd,
   metricsFromEquity,
   normalizedTargets,
+  pickPointInTimePrice,
   scoreDrivenWeights,
   simulateEquity,
   STATE_GATED_NO_TRADE_BAND,
   stateGatedWeights,
+  type PriceObservationRow,
 } from "@/server/backtest-service";
 
 describe("回测引擎纯函数", () => {
@@ -45,6 +49,13 @@ describe("回测引擎纯函数", () => {
     expect(costly.equity.at(-1)!.nav).toBeCloseTo(1.208185, 9);
     expect(costly.turnoverBps).toBe(15000);
     expect(costly.tradeCount).toBe(4);
+  });
+
+  it("simulateEquity：空评估网格返回空曲线（不产出缺日期的残点）", () => {
+    const result = simulateEquity([], {}, {}, null, 10);
+    expect(result.equity).toEqual([]);
+    expect(result.tradeCount).toBe(0);
+    expect(result.turnoverBps).toBe(0);
   });
 
   it("metricsFromEquity：回撤与年化合理", () => {
@@ -103,6 +114,18 @@ describe("回测引擎纯函数", () => {
     const single = metricsFromEquity([{ date: "2025-01-01", nav: 1 }]);
     expect(single.worstYearBps).toBeNull();
     expect(single.totalReturnBps).toBe(0);
+  });
+
+  it("metricsFromEquity：空数组返回零值而不抛 TypeError", () => {
+    expect(metricsFromEquity([])).toEqual({
+      totalReturnBps: 0,
+      cagrBps: 0,
+      maxDrawdownBps: 0,
+      volatilityBps: 0,
+      sharpeMilli: 0,
+      worstYearBps: null,
+      longestDrawdownDays: 0,
+    });
   });
 
   it("metricsFromEquity：波动率年化按实测区间长度而非固定月度", () => {
@@ -208,16 +231,91 @@ describe("回测引擎纯函数", () => {
     });
   });
 
-  describe("normalizedTargets 兜底分支", () => {
-    it("targetBps 合计为 0 时仍读取 maxBps/minBps 上限，并标记 fallback", () => {
+  describe("pickPointInTimePrice 点内取价", () => {
+    const base: PriceObservationRow = {
+      id: "row-a",
+      asOf: "2025-01-31",
+      availableAt: "2025-01-31T18:00:00+08:00",
+      fetchedAt: "2025-01-31T19:00:00+08:00",
+      provider: "tushare",
+      quality: "VALID",
+      isManualOverride: false,
+      value: 100,
+    };
+    const row = (overrides: Partial<PriceObservationRow>): PriceObservationRow => ({ ...base, ...overrides });
+
+    it("只取 asOf 与 availableAt 都不晚于评估日的最后前值", () => {
+      const rows = [
+        row({ asOf: "2025-01-31", value: 100 }),
+        row({ asOf: "2025-02-28", availableAt: "2025-02-28T18:00:00+08:00", fetchedAt: "2025-02-28T19:00:00+08:00", value: 110 }),
+      ];
+      expect(pickPointInTimePrice(rows, "2025-02-01")).toEqual({ asOf: "2025-01-31", value: 100 });
+      expect(pickPointInTimePrice(rows, "2025-02-28")).toEqual({ asOf: "2025-02-28", value: 110 });
+      expect(pickPointInTimePrice(rows, "2025-01-30")).toBeNull();
+    });
+
+    it("availableAt 晚于评估日的修订不可提前使用", () => {
+      const rows = [
+        row({ asOf: "2025-01-31", availableAt: "2025-03-01T08:00:00+08:00", value: 999 }),
+        row({ asOf: "2025-01-20", availableAt: "2025-01-20T18:00:00+08:00", value: 80 }),
+      ];
+      // 评估日 2025-02-01：1/31 的补录要到 3/1 才可用，只能用 1/20 的前值
+      expect(pickPointInTimePrice(rows, "2025-02-01")).toEqual({ asOf: "2025-01-20", value: 80 });
+      // 到 2025-03-02 该修订已可用，取最后 asOf
+      expect(pickPointInTimePrice(rows, "2025-03-02")).toEqual({ asOf: "2025-01-31", value: 999 });
+    });
+
+    it("同一 asOf 多行按 手工覆盖 > tushare > VALID 的优先级选一行", () => {
+      const sameAsOf = [
+        row({ id: "r1", provider: "fred", value: 1 }),
+        row({ id: "r2", provider: "tushare", quality: "PARTIAL", value: 2 }),
+        row({ id: "r3", provider: "tushare", quality: "VALID", value: 3 }),
+        row({ id: "r4", provider: "manual", isManualOverride: true, value: 4 }),
+      ];
+      expect(pickPointInTimePrice(sameAsOf, "2025-02-01")?.value).toBe(4);
+      expect(pickPointInTimePrice(sameAsOf.filter((entry) => !entry.isManualOverride), "2025-02-01")?.value).toBe(3);
+      expect(pickPointInTimePrice(sameAsOf.filter((entry) => entry.provider !== "tushare" && !entry.isManualOverride), "2025-02-01")?.value).toBe(1);
+    });
+
+    it("同优先级下 availableAt/fetchedAt 更晚者优先；完全同键时 id 字典序小者优先且与输入顺序无关", () => {
+      const revisionRows = [
+        row({ id: "a", availableAt: "2025-01-31T18:00:00+08:00", fetchedAt: "2025-01-31T19:00:00+08:00", value: 1 }),
+        row({ id: "b", availableAt: "2025-01-31T20:00:00+08:00", fetchedAt: "2025-01-31T21:00:00+08:00", value: 2 }),
+      ];
+      expect(pickPointInTimePrice(revisionRows, "2025-02-01")?.value).toBe(2);
+      expect(pickPointInTimePrice([...revisionRows].reverse(), "2025-02-01")?.value).toBe(2);
+
+      const fetchedRows = [
+        row({ id: "c", fetchedAt: "2025-01-31T19:00:00+08:00", value: 10 }),
+        row({ id: "d", fetchedAt: "2025-01-31T23:00:00+08:00", value: 11 }),
+      ];
+      expect(pickPointInTimePrice(fetchedRows, "2025-02-01")?.value).toBe(11);
+
+      const identicalRows = [
+        row({ id: "id-b", value: 21 }),
+        row({ id: "id-a", value: 20 }),
+      ];
+      expect(pickPointInTimePrice(identicalRows, "2025-02-01")?.value).toBe(20);
+      expect(pickPointInTimePrice([...identicalRows].reverse(), "2025-02-01")?.value).toBe(20);
+    });
+
+    it("非有限价格被忽略；完全无可用价格返回 null", () => {
+      expect(pickPointInTimePrice([row({ value: Number.NaN })], "2025-02-01")).toBeNull();
+      expect(pickPointInTimePrice([], "2025-02-01")).toBeNull();
+    });
+  });
+
+  describe("normalizedTargets 权重归一与上限量纲", () => {
+    it("targetBps 合计为 0 时等权兜底，且不下发量纲不一致的上下限", () => {
       const result = normalizedTargets([{ assetBucket: "GOLD", targetBps: 0, minBps: 500, maxBps: 1500 }]);
       expect(result.fallback).toBe(true);
       expect(result.target.GOLD).toBeCloseTo(0.25, 10);
-      expect(result.limitMax.GOLD).toBeCloseTo(0.15, 10);
-      expect(result.limitMin.GOLD).toBeCloseTo(0.05, 10);
+      // 兜底时没有归一化分母，maxBps/minBps（总资产 bps 口径）不能直接当作归一权重上下限
+      expect(result.limitMax).toEqual({});
+      expect(result.limitMin).toEqual({});
     });
 
-    it("正常路径按可评分桶的目标比例归一，并独立读取上下限", () => {
+    it("正常路径按可评分桶目标比例归一，上下限除以同一分母换算", () => {
       const result = normalizedTargets([
         { assetBucket: "GOLD", targetBps: 1000, minBps: 500, maxBps: 1500 },
         { assetBucket: "TECH_GROWTH", targetBps: 3000, minBps: 2000, maxBps: 4000 },
@@ -227,12 +325,41 @@ describe("回测引擎纯函数", () => {
       expect(result.target.GOLD).toBeCloseTo(0.25, 12);
       expect(result.target.TECH_GROWTH).toBeCloseTo(0.75, 12);
       expect(result.target.CASH_BONDS).toBeUndefined();
-      expect(result.limitMax.GOLD).toBeCloseTo(0.15, 12);
-      expect(result.limitMax.TECH_GROWTH).toBeCloseTo(0.4, 12);
+      // 分母是四只可评分桶 targetBps 之和（此例 1000+3000=4000），不是总资产 10000
+      expect(result.limitMax.GOLD).toBeCloseTo(1500 / 4000, 12);
+      expect(result.limitMax.TECH_GROWTH).toBeCloseTo(4000 / 4000, 12);
+      expect(result.limitMin.GOLD).toBeCloseTo(500 / 4000, 12);
+      expect(result.limitMin.TECH_GROWTH).toBeCloseTo(2000 / 4000, 12);
+      expect(Object.values(result.target).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12);
+      for (const bucket of BACKTEST_BUCKETS) {
+        if (result.target[bucket] === undefined) continue;
+        expect(result.target[bucket]).toBeLessThanOrEqual(result.limitMax[bucket] + 1e-12);
+      }
+    });
+
+    it("默认四桶配置：上限≈TECH 57.14% / VALUE 50% / GOLD·BROAD 21.43%，target 不超限且合计为 1", () => {
+      const targets = Object.entries(DEFAULT_ALLOCATION_BANDS).map(([assetBucket, band]) => ({ assetBucket, ...band }));
+      const result = normalizedTargets(targets);
+      expect(result.fallback).toBe(false);
+      expect(result.limitMax.TECH_GROWTH).toBeCloseTo(4000 / 7000, 10);
+      expect(result.limitMax.VALUE_DIVIDEND).toBeCloseTo(3500 / 7000, 10);
+      expect(result.limitMax.GOLD).toBeCloseTo(1500 / 7000, 10);
+      expect(result.limitMax.BROAD_EQUITY).toBeCloseTo(1500 / 7000, 10);
+      expect(Object.values(result.target).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12);
+      for (const bucket of BACKTEST_BUCKETS) {
+        expect(result.target[bucket]).toBeLessThanOrEqual(result.limitMax[bucket] + 1e-12);
+      }
+      // 中性评分（机会分 40 -> 乘数 1）下含上限的评分映射不得削弱任何桶的目标权重：
+      // 修复前 TECH target 42.9% 会被「总资产口径」的 40% 上限误钳。
+      const neutral = Object.fromEntries(BACKTEST_BUCKETS.map((bucket) => [bucket, 40]));
+      const capped = scoreDrivenWeights(neutral, result.target, result.limitMax);
+      for (const bucket of BACKTEST_BUCKETS) {
+        expect(capped[bucket]).toBeCloseTo(result.target[bucket], 10);
+      }
     });
   });
 
-  describe("buildRebalance 信号滞后（T+1）", () => {
+  describe("buildRebalance 信号在下一个评估日收盘成交", () => {
     const dates = ["2025-01-31", "2025-02-28", "2025-03-31"];
     const target = { GOLD: 0.25, VALUE_DIVIDEND: 0.25, TECH_GROWTH: 0.25, BROAD_EQUITY: 0.25 };
     // 注意 2025-03-31 自己的分数很高：若实现误读当期快照会得到高权重——用于暴露前视。

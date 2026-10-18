@@ -40,6 +40,11 @@ function degradeQuality<T extends { quality: "VALID" | "PARTIAL" }>(rows: readon
   return stale ? rows.map((row) => ({ ...row, quality: "PARTIAL" as const })) : [...rows];
 }
 
+/** warnings 是跨桶共享数组：同一提示只保留一条，按桶去重避免重复刷屏。 */
+function pushWarningOnce(warnings: string[], message: string): void {
+  if (!warnings.includes(message)) warnings.push(message);
+}
+
 function yearsBefore(day: string, years: number): string { const date = new Date(`${day}T00:00:00Z`); date.setUTCFullYear(date.getUTCFullYear() - years); return date.toISOString().slice(0, 10); }
 function monthsBefore(day: string, months: number): string { const date = new Date(`${day}T00:00:00Z`); date.setUTCMonth(date.getUTCMonth() - months); return date.toISOString().slice(0, 10); }
 function providerMessage(result: ProviderResult<unknown>, label: string): string | null { return result.ok ? (result.data instanceof Array && result.data.length === 0 ? `${label}没有返回数据` : null) : `${label}：${result.error.code} ${result.error.message}`; }
@@ -56,12 +61,7 @@ function metricRows(bucket: ScorableAssetBucket, result: Extract<ProviderResult<
 function aggregateRows(bucket: ScorableAssetBucket, results: AggregateMetricResult[], asOf: string, fetchedAt: string): ProviderMetricObservationInput[] {
   return results.flatMap((result): ProviderMetricObservationInput[] => result.value === null ? [] : [{ subjectType: "ASSET_BUCKET", subjectId: bucket, metricKey: result.metricKey, value: result.value.toFixed(8), unit: result.metricKey === "DIVIDEND_YIELD" || result.metricKey === "ROE" || result.metricKey.includes("GROWTH") ? "percent" : "ratio", provider: AGGREGATE_PROVIDER, observedAt: `${result.effectiveDate || asOf}T15:00:00+08:00`, availableAt: `${asOf}T18:00:00+08:00`, asOf, fetchedAt, quality: result.quality, metadataJson: JSON.stringify({ constituentCoverage: result.constituentCoverage, constituentCount: result.constituentCount, validConstituentCount: result.validConstituentCount, effectiveDate: result.effectiveDate }) }]);
 }
-/**
- * 从数据库历史 + 本次抓取行合并出 price/pe 序列，再按【日历约一年】(>=360 天) 的
- * 最近前值计算 EPS(price/pe) 同比增速（Code Review H7）：
- * 旧实现只看本次运行窗口且硬编码 252 个采样点，在降采样入库策略下永远凑不齐，
- * 属于死路径。改为跨运行读取库内全量历史后，月度/降采样序列也能产出同比点。
- */
+/** 读取某桶指定指标的全量入库历史（跨运行），供派生序列做点内配对（Code Review H7）。 */
 function bucketMetricHistory(bucket: string, metricKeys: string[]): ProviderMetricObservationInput[] {
   return metricKeys.flatMap((metricKey) =>
     getDatabase()
@@ -78,59 +78,115 @@ function bucketMetricHistory(bucket: string, metricKeys: string[]): ProviderMetr
   ) as unknown as ProviderMetricObservationInput[];
 }
 
-function derivedEarningsGrowth(bucket: Exclude<ScorableAssetBucket, "GOLD">, rows: ProviderMetricObservationInput[], fetchedAt: string): ProviderMetricObservationInput[] {
-  const prices = new Map<string, number>();
-  const peByKeyAsOf = new Map<string, ProviderMetricObservationInput[]>();
-  for (const row of [...bucketMetricHistory(bucket, ["PRICE_CLOSE"]), ...rows]) {
-    if (row.metricKey === "PRICE_CLOSE") {
-      prices.set(row.asOf, Number(row.value));
-    } else if (row.metricKey === "PE_TTM" || row.metricKey === "PE_FORWARD") {
-      const list = peByKeyAsOf.get(row.metricKey + ":" + row.asOf) ?? [];
-      list.push(row);
-      peByKeyAsOf.set(row.metricKey + ":" + row.asOf, list);
+/**
+ * 同一 asOf 只保留「该观察日已可见」的最新版本（点内配对，无前视）：
+ * - 只接受 availableAt 的日期 <= asOf 的版本（当天收盘后发布的版本对当天仍可见）；
+ * - 同日多版本取 availableAt 最晚者，再以 fetchedAt 兜底；
+ * - 可选 evaluationEnd 过滤观察日之后的记录（手工/异常未来日期不进入派生）。
+ */
+function latestPointAvailableByAsOf(
+  rows: ProviderMetricObservationInput[],
+  metricKey: string,
+  evaluationEnd?: string,
+): Map<string, ProviderMetricObservationInput> {
+  const selected = new Map<string, ProviderMetricObservationInput>();
+  for (const row of rows) {
+    if (row.metricKey !== metricKey) continue;
+    const asOf = row.asOf.slice(0, 10);
+    if (evaluationEnd !== undefined && asOf > evaluationEnd) continue;
+    if ((row.availableAt ?? row.asOf).slice(0, 10) > asOf) continue;
+    const existing = selected.get(asOf);
+    if (!existing) {
+      selected.set(asOf, row);
+      continue;
+    }
+    if (row.availableAt > existing.availableAt || (row.availableAt === existing.availableAt && row.fetchedAt > existing.fetchedAt)) {
+      selected.set(asOf, row);
     }
   }
-  const peKey = bucket === "TECH_GROWTH" ? "PE_FORWARD" : "PE_TTM";
-  const series = Array.from(peByKeyAsOf.entries())
-    .filter(([key]) => key.startsWith(peKey + ":"))
-    .map(([, list]) => list[0])
-    .filter((row) => {
-      const price = prices.get(row.asOf);
-      const pe = Number(row.value);
-      return price !== undefined && price > 0 && pe > 0;
-    })
-    .map((row) => ({ row, value: prices.get(row.asOf)! / Number(row.value) }))
-    .sort((a, b) => a.row.asOf.localeCompare(b.row.asOf));
-  const metricKey: CanonicalMetricKey = bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH" : "EARNINGS_GROWTH";
+  return selected;
+}
+
+/** 派生行的可用时间不得早于任一输入：取较晚者（与 ERP 派生同一无前视规则）。 */
+function maxAvailableAt(...values: Array<string | undefined>): string {
+  let latest = "";
+  for (const value of values) {
+    if (!value) continue;
+    if (!latest) {
+      latest = value;
+      continue;
+    }
+    const currentMs = Date.parse(value);
+    const latestMs = Date.parse(latest);
+    latest = Number.isFinite(currentMs) && Number.isFinite(latestMs) ? (currentMs > latestMs ? value : latest) : (value > latest ? value : latest);
+  }
+  return latest;
+}
+
+/**
+ * 由 PRICE_CLOSE / PE 序列派生的盈利同比增速（EPS = price/pe 的【日历约一年】增速）。
+ *
+ * 数据新鲜度修复：
+ * - PE 历史必须也从数据库读：增量刷新本次运行只带回最新一天的 PE，单靠本次 rows
+ *   永远凑不出 360 天前的基准点，派生盈利增长会恒为空 → 财务基本面永久陈旧。
+ * - 点内配对：价格与 PE 只在同一 asOf 配对，且只使用该观察日已可见（availableAt<=asOf）
+ *   的最新版本；派生行 availableAt 取所有输入的较晚者，避免前视。
+ * - Tech v1.4 已删除 PE_FORWARD 生产者：三个桶统一用已实现的 PE_TTM 派生；
+ *   仅当旧库完全没有 PE_TTM 历史时，回退到 v1.3 遗留的 PE_FORWARD 代理行。
+ */
+function derivedEarningsGrowth(bucket: Exclude<ScorableAssetBucket, "GOLD">, rows: ProviderMetricObservationInput[], fetchedAt: string, evaluationEnd: string): ProviderMetricObservationInput[] {
+  const merged = [...bucketMetricHistory(bucket, ["PRICE_CLOSE", "PE_TTM", "PE_FORWARD"]), ...rows];
+  const pricesByAsOf = latestPointAvailableByAsOf(merged, "PRICE_CLOSE", evaluationEnd);
+  const peTtmByAsOf = latestPointAvailableByAsOf(merged, "PE_TTM", evaluationEnd);
+  // v1.4 起 PE_TTM 是唯一估值口径；PE_FORWARD 仅作为旧库兼容回退。
+  const peKey = peTtmByAsOf.size > 0 ? "PE_TTM" : "PE_FORWARD";
+  const peByAsOf = peTtmByAsOf.size > 0 ? peTtmByAsOf : latestPointAvailableByAsOf(merged, "PE_FORWARD", evaluationEnd);
   const DAY_MS = 24 * 60 * 60 * 1000;
-  return series.flatMap((current): ProviderMetricObservationInput[] => {
-    let base: { row: ProviderMetricObservationInput; value: number } | null = null;
+  const series = Array.from(peByAsOf.entries()).flatMap(([asOf, row]) => {
+    const priceRow = pricesByAsOf.get(asOf);
+    const price = Number(priceRow?.value);
+    const pe = Number(row.value);
+    return priceRow && price > 0 && pe > 0 ? [{ row, priceRow, value: price / pe }] : [];
+  }).sort((first, second) => first.row.asOf.localeCompare(second.row.asOf));
+  const metricKey: CanonicalMetricKey = bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH" : "EARNINGS_GROWTH";
+  const output: ProviderMetricObservationInput[] = [];
+  for (let index = 0; index < series.length; index += 1) {
+    const current = series[index];
     const targetMs = Date.parse(current.row.asOf + "T00:00:00Z") - 360 * DAY_MS;
-    for (let j = series.indexOf(current) - 1; j >= 0; j -= 1) {
-      if (Date.parse(series[j].row.asOf + "T00:00:00Z") <= targetMs) {
-        base = series[j];
+    let base: (typeof series)[number] | null = null;
+    for (let earlier = index - 1; earlier >= 0; earlier -= 1) {
+      if (Date.parse(series[earlier].row.asOf + "T00:00:00Z") <= targetMs) {
+        base = series[earlier];
         break;
       }
     }
-    if (!base || base.value === 0) return [];
+    if (!base || base.value === 0) continue;
     const value = (current.value / base.value - 1) * 100;
-    return Number.isFinite(value)
-      ? [{
-          ...current.row,
-          metricKey,
-          value: value.toFixed(6),
-          unit: "percent",
-          provider: "tushare-derived",
-          fetchedAt,
-          quality: "PARTIAL",
-          metadataJson: JSON.stringify({
-            proxy: "price_over_pe",
-            lookbackDays: Math.round((Date.parse(current.row.asOf + "T00:00:00Z") - Date.parse(base.row.asOf + "T00:00:00Z")) / DAY_MS),
-            baseAsOf: base.row.asOf,
-          }),
-        }]
-      : [];
-  });
+    if (!Number.isFinite(value)) continue;
+    output.push({
+      ...current.row,
+      metricKey,
+      value: value.toFixed(6),
+      unit: "percent",
+      provider: "tushare-derived",
+      fetchedAt,
+      quality: "PARTIAL",
+      availableAt: maxAvailableAt(current.row.availableAt, current.priceRow.availableAt, base.row.availableAt, base.priceRow.availableAt),
+      metadataJson: JSON.stringify({
+        proxy: "price_over_pe",
+        peMetricKey: peKey,
+        lookbackDays: Math.round((Date.parse(current.row.asOf + "T00:00:00Z") - Date.parse(base.row.asOf + "T00:00:00Z")) / DAY_MS),
+        baseAsOf: base.row.asOf,
+        inputs: {
+          peAvailableAt: current.row.availableAt,
+          priceAvailableAt: current.priceRow.availableAt,
+          basePeAvailableAt: base.row.availableAt,
+          basePriceAvailableAt: base.priceRow.availableAt,
+        },
+      }),
+    });
+  }
+  return output;
 }
 
 /**
@@ -356,7 +412,15 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
   const fundamentalRows = await refreshFundamentals(provider, proxies, end, range, fullBackfill, warnings, fetchedAt); const allRows = [...fundamentalRows.filter((row) => row.subjectType === "INSTRUMENT")];
   for (const row of fundamentalRows.filter((row) => row.subjectType === "ASSET_BUCKET")) byBucket.set(row.subjectId as ScorableAssetBucket, [...(byBucket.get(row.subjectId as ScorableAssetBucket) ?? []), row]);
   byBucket.set("VALUE_DIVIDEND", [...(byBucket.get("VALUE_DIVIDEND") ?? []), ...await refreshDividendStability(provider, proxies.find((item) => item.bucket === "VALUE_DIVIDEND"), end, fullBackfill, warnings, fetchedAt)]);
-  for (const bucket of ["VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"] as const) { const rows = byBucket.get(bucket) ?? []; const target = bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH" : "EARNINGS_GROWTH"; if (!rows.some((row) => row.metricKey === target && row.provider === AGGREGATE_PROVIDER)) allRows.push(...derivedEarningsGrowth(bucket, rows, fetchedAt)); }
+  for (const bucket of ["VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"] as const) {
+    const rows = byBucket.get(bucket) ?? [];
+    const target = bucket === "BROAD_EQUITY" ? "INDEX_EARNINGS_GROWTH" : "EARNINGS_GROWTH";
+    if (rows.some((row) => row.metricKey === target && row.provider === AGGREGATE_PROVIDER)) continue;
+    const derived = derivedEarningsGrowth(bucket, rows, fetchedAt, end);
+    // 派生兜底失效不再静默：增量模式下缺 PE 历史会让财务基本面永久陈旧。
+    if (derived.length === 0) pushWarningOnce(warnings, `${bucket} 派生盈利增长无可用 PE 历史`);
+    allRows.push(...derived);
+  }
   allRows.push(...deriveEquityRiskPremium("BROAD_EQUITY", byBucket.get("BROAD_EQUITY") ?? [], end, fetchedAt));
   allRows.push(...Array.from(byBucket.values()).flat()); const commit = commitProviderMetricObservations(allRows); const reports: BucketRefreshReport[] = [];
   for (const proxy of proxies) {
@@ -369,7 +433,9 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
       : latestAsOf
         ? [{ bucket: proxy.bucket, asOf: latestAsOf }]
         : [];
-    const scores = requests.length > 0 ? await refreshScoresForBuckets(requests) : [];
+    // 全量回填的历史快照是月度采样，无法满足「连续 N 个交易日」的逐日确认：
+    // 跳过确认直接按候选态入库（回测/历史评分用途）；增量刷新仍走严格交易日确认。
+    const scores = requests.length > 0 ? await refreshScoresForBuckets(requests, { skipConfirmation: fullBackfill }) : [];
     reports.push({ bucket: proxy.bucket, proxy: proxy.label, symbol: proxy.symbol, observationCount: rows.length, latestAsOf, scoreSaved: scores.some((score) => score.saved), warnings });
   }
   const status = reports.some((report) => report.observationCount > 0) ? (warnings.length ? "DEGRADED" : "READY") : "ERROR"; saveProviderStatus("tushare", status, fetchedAt, warnings, { index_dailybasic: directCapability, index_weight: "READY", daily_basic: "READY", fina_indicator: fullBackfill ? "REQUESTED" : "INCREMENTAL_PENDING", fund_share: "READY", fund_nav: "READY" }); // FRED 状态独立评估（Code Review M13）：不凭环境变量标 READY，也不把 FRED 失败算进 tushare。

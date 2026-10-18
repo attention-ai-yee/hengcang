@@ -5,8 +5,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { closeDatabase, getDatabase } from "@/db/client";
-import { portfolios, scoreSnapshots } from "@/db/schema";
-import { loadCandidateChain } from "@/server/scoring-refresh-service";
+import { metricObservations, portfolios, scoreSnapshots } from "@/db/schema";
+import { loadCandidateChain, loadKnownTradingDates } from "@/server/scoring-refresh-service";
 import { saveManualScore } from "@/server/scoring-service";
 
 /**
@@ -84,5 +84,35 @@ describe("候选链与手工评分（H5）", () => {
     expect(parsed.candidateState).toBe("LOW_CONFIDENCE");
     const chain = await loadCandidateChain("GOLD", "2026-08-23");
     expect(chain.states).toContain("LOW_CONFIDENCE");
+  });
+});
+
+describe("已知交易日历（连续交易日确认口径）", () => {
+  function insertObservation(input: { asOf: string; metricKey: string; provider?: string }) {
+    getDatabase().insert(metricObservations).values({
+      id: randomUUID(),
+      subjectType: "ASSET_BUCKET",
+      subjectId: "GOLD",
+      metricKey: input.metricKey,
+      value: "100",
+      unit: "price",
+      provider: input.provider ?? "tushare",
+      observedAt: `${input.asOf}T15:00:00+08:00`,
+      availableAt: `${input.asOf}T18:00:00+08:00`,
+      asOf: input.asOf,
+      fetchedAt: now,
+      quality: "VALID",
+    }).run();
+  }
+
+  it("只取 PRICE_CLOSE 观察日，升序去重且忽略其他指标", () => {
+    // 乱序插入 + 非价格指标 + 同日双 provider（distinct 后只算一个交易日）
+    insertObservation({ asOf: "2026-08-20", metricKey: "PRICE_CLOSE" });
+    insertObservation({ asOf: "2026-08-17", metricKey: "PRICE_CLOSE" });
+    insertObservation({ asOf: "2026-08-18", metricKey: "PE_TTM" });
+    insertObservation({ asOf: "2026-08-18", metricKey: "PRICE_CLOSE" });
+    insertObservation({ asOf: "2026-08-20", metricKey: "PRICE_CLOSE", provider: "manual" });
+
+    expect(loadKnownTradingDates()).toEqual(["2026-08-17", "2026-08-18", "2026-08-20"]);
   });
 });

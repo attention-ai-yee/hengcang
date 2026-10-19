@@ -2,7 +2,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { z } from "zod";
 import { getDatabase } from "@/db/client";
 import { DEFAULT_PORTFOLIO_ID } from "@/db/queries";
-import { holdings, holdingTheses, signals, thesisBreakers, thesisEvents } from "@/db/schema";
+import { holdings, holdingTheses, newsItems, signals, thesisBreakers, thesisEvents } from "@/db/schema";
 import { needsThesis, planBreakerChanges, reviewDue, thesisStatus, type ThesisStatus } from "@/domain/thesis";
 import { shanghaiDate } from "@/lib/shanghai";
 import type { thesisEventPayloadSchema, thesisPayloadSchema } from "@/lib/validation";
@@ -11,9 +11,12 @@ import { ensureDefaultPortfolioRecord } from "./portfolio-service";
 export type ThesisPayload = z.infer<typeof thesisPayloadSchema>;
 export type ThesisEventPayload = z.infer<typeof thesisEventPayloadSchema>;
 
+/** MANUAL：手工记录；AI：AI 新闻监控写入（§7） */
+export type ThesisEventOrigin = "MANUAL" | "AI";
+
 export class ThesisError extends Error {
   constructor(
-    readonly code: "HOLDING_NOT_FOUND" | "THESIS_NOT_FOUND" | "UNKNOWN_BREAKER" | "BREAKER_TRIGGERED",
+    readonly code: "HOLDING_NOT_FOUND" | "THESIS_NOT_FOUND" | "UNKNOWN_BREAKER" | "BREAKER_TRIGGERED" | "NOT_AI_TRIGGER",
     message: string,
     readonly status: number,
   ) {
@@ -92,7 +95,10 @@ export async function saveThesis(holdingId: string, payload: ThesisPayload, now 
     if (thesis) {
       tx.update(holdingTheses).set({ thesis: payload.thesis, updatedAt: timestamp }).where(eq(holdingTheses.id, thesis.id)).run();
     } else {
-      thesis = { id: crypto.randomUUID(), portfolioId: DEFAULT_PORTFOLIO_ID, holdingId, thesis: payload.thesis, createdAt: timestamp, updatedAt: timestamp };
+      thesis = {
+        id: crypto.randomUUID(), portfolioId: DEFAULT_PORTFOLIO_ID, holdingId, thesis: payload.thesis,
+        newsQueriesJson: null, newsQueriesBasis: null, newsScannedAt: null, createdAt: timestamp, updatedAt: timestamp,
+      };
       tx.insert(holdingTheses).values(thesis).run();
     }
     const existing = tx.select().from(thesisBreakers).where(eq(thesisBreakers.thesisId, thesis.id)).all();
@@ -117,8 +123,9 @@ export async function saveThesis(holdingId: string, payload: ThesisPayload, now 
  * 记录消息或复核：
  * - NEWS 对应到某条失效条件 → 该条触发（TRIGGERED），持仓暂停新增，写 WARNING 信号；
  * - REVIEW 对应到已触发的条件 → 解除（回到 ACTIVE），写 INFO 信号；不对应条件 = 定期复核。
+ * origin = AI 时由新闻监控写入（§7），信号里注明是 AI 判断、可一键撤销。
  */
-export async function recordThesisEvent(holdingId: string, payload: ThesisEventPayload, now = new Date()) {
+export async function recordThesisEvent(holdingId: string, payload: ThesisEventPayload, now = new Date(), origin: ThesisEventOrigin = "MANUAL") {
   const holding = findHolding(holdingId);
   if (!holding) throw new ThesisError("HOLDING_NOT_FOUND", "持仓不存在", 404);
   const thesis = findThesis(holdingId);
@@ -134,6 +141,7 @@ export async function recordThesisEvent(holdingId: string, payload: ThesisEventP
     id: crypto.randomUUID(),
     thesisId: thesis.id,
     kind: payload.kind,
+    origin,
     occurredOn: payload.occurredOn,
     summary: payload.summary,
     sourceUrl: payload.kind === "NEWS" ? payload.sourceUrl ?? null : null,
@@ -154,7 +162,9 @@ export async function recordThesisEvent(holdingId: string, payload: ThesisEventP
         signalType: "THESIS_BREACH",
         oldState: null,
         newState: null,
-        summary: `${holding.name}：触发失效条件「${breaker.description}」——暂停新增，写完复核后解除`,
+        summary: origin === "AI"
+          ? `${holding.name}：AI 从新闻判断触发失效条件「${breaker.description}」——暂停新增；看原文后写复核解除，误判可一键撤销`
+          : `${holding.name}：触发失效条件「${breaker.description}」——暂停新增，写完复核后解除`,
         isDuplicate: false,
         createdAt: timestamp,
       }).run();
@@ -182,11 +192,61 @@ export async function recordThesisEvent(holdingId: string, payload: ThesisEventP
   return { event, view: (await getThesisView(holdingId, shanghaiDate(now))) as ThesisView };
 }
 
+/**
+ * 撤销 AI 误判（§7）：只适用于由 AI 写入的消息触发、目前仍处于触发状态的条件。
+ * 条件回到 ACTIVE，记一条 DISMISS 事件（不算复核，不会重置季度复核时间），写 INFO 信号。
+ */
+export async function dismissAiTrigger(holdingId: string, breakerId: string, note: string, now = new Date()) {
+  const holding = findHolding(holdingId);
+  if (!holding) throw new ThesisError("HOLDING_NOT_FOUND", "持仓不存在", 404);
+  const thesis = findThesis(holdingId);
+  if (!thesis) throw new ThesisError("THESIS_NOT_FOUND", "这个持仓还没有投资逻辑", 409);
+  const db = getDatabase();
+  const breaker = db.select().from(thesisBreakers).where(and(eq(thesisBreakers.id, breakerId), eq(thesisBreakers.thesisId, thesis.id))).get();
+  if (!breaker) throw new ThesisError("UNKNOWN_BREAKER", "失效条件不存在或不属于这份投资逻辑", 422);
+  const trigger = breaker.status === "TRIGGERED" && breaker.triggeredByEventId
+    ? db.select().from(thesisEvents).where(eq(thesisEvents.id, breaker.triggeredByEventId)).get()
+    : undefined;
+  if (trigger?.origin !== "AI") throw new ThesisError("NOT_AI_TRIGGER", "只有 AI 自动触发的条件可以一键撤销；其它情况请写复核", 409);
+  const timestamp = now.toISOString();
+  const event = {
+    id: crypto.randomUUID(),
+    thesisId: thesis.id,
+    kind: "DISMISS",
+    origin: "MANUAL",
+    occurredOn: shanghaiDate(now),
+    summary: [...`撤销 AI 误判：${note}`].slice(0, 500).join(""),
+    sourceUrl: null,
+    breakerId: breaker.id,
+    recordedAt: timestamp,
+  };
+  db.transaction((tx) => {
+    tx.insert(thesisEvents).values(event).run();
+    tx.update(thesisBreakers).set({ status: "ACTIVE", triggeredAt: null, triggeredByEventId: null, updatedAt: timestamp }).where(eq(thesisBreakers.id, breaker.id)).run();
+    tx.insert(signals).values({
+      id: crypto.randomUUID(),
+      portfolioId: DEFAULT_PORTFOLIO_ID,
+      assetBucket: holding.assetBucket,
+      fingerprint: `THESIS_AI_DISMISSED|${breaker.id}|${event.id}`,
+      severity: "INFO",
+      signalType: "THESIS_AI_DISMISSED",
+      oldState: null,
+      newState: null,
+      summary: `${holding.name}：已撤销 AI 对「${breaker.description}」的误判，恢复正常`,
+      isDuplicate: false,
+      createdAt: timestamp,
+    }).run();
+  });
+  return { event, view: (await getThesisView(holdingId, shanghaiDate(now))) as ThesisView };
+}
+
 export interface ThesisSummary {
   status: ThesisStatus;
   reviewDue: boolean;
   /** 已触发、等待复核的失效条件 */
   triggered: string[];
+  /** AI 发现、等你确认的「可能触发」新闻条数 */
+  pendingNews: number;
 }
 
 /** 持仓页用：每个写了投资逻辑的持仓的状态摘要（没写的持仓不在 Map 里）。 */
@@ -197,6 +257,8 @@ export async function listThesisSummaries(today = shanghaiDate()): Promise<Map<s
   const ids = theses.map((thesis) => thesis.id);
   const breakers = db.select().from(thesisBreakers).where(inArray(thesisBreakers.thesisId, ids)).orderBy(asc(thesisBreakers.position)).all();
   const reviews = db.select().from(thesisEvents).where(and(inArray(thesisEvents.thesisId, ids), eq(thesisEvents.kind, "REVIEW"))).all();
+  const pending = db.select({ thesisId: newsItems.thesisId }).from(newsItems)
+    .where(and(inArray(newsItems.thesisId, ids), eq(newsItems.verdict, "POSSIBLE"), eq(newsItems.status, "OPEN"))).all();
   return new Map(theses.map((thesis) => {
     const own = breakers.filter((breaker) => breaker.thesisId === thesis.id);
     const reviewedOn = lastReviewOn(reviews.filter((event) => event.thesisId === thesis.id));
@@ -204,6 +266,7 @@ export async function listThesisSummaries(today = shanghaiDate()): Promise<Map<s
       status: thesisStatus({ hasThesis: true, breakers: own }),
       reviewDue: reviewDue({ lastReviewOn: reviewedOn, thesisCreatedAt: thesis.createdAt, today }),
       triggered: own.filter((breaker) => breaker.status === "TRIGGERED").map((breaker) => breaker.description),
+      pendingNews: pending.filter((item) => item.thesisId === thesis.id).length,
     }];
   }));
 }

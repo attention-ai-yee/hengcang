@@ -284,6 +284,12 @@ export const holdingTheses = sqliteTable(
     portfolioId: text("portfolio_id").notNull().references(() => portfolios.id, { onDelete: "cascade" }),
     holdingId: text("holding_id").notNull().references(() => holdings.id, { onDelete: "cascade" }),
     thesis: text("thesis").notNull(),
+    /** AI 新闻监控（§7）：由投资逻辑和失效条件生成的搜索词（JSON 字符串数组） */
+    newsQueriesJson: text("news_queries_json"),
+    /** 生成搜索词时逻辑与条件的指纹；逻辑或条件改了就重新生成 */
+    newsQueriesBasis: text("news_queries_basis"),
+    /** 最近一次完成新闻扫描的时间（UTC ISO） */
+    newsScannedAt: text("news_scanned_at"),
     ...timestamps,
   },
   (table) => [uniqueIndex("holding_thesis_holding_unique").on(table.holdingId)],
@@ -312,8 +318,10 @@ export const thesisEvents = sqliteTable(
   {
     id: text("id").primaryKey(),
     thesisId: text("thesis_id").notNull().references(() => holdingTheses.id, { onDelete: "cascade" }),
-    /** NEWS：消息 / 事件；REVIEW：复核结论 */
+    /** NEWS：消息 / 事件；REVIEW：复核结论；DISMISS：撤销 AI 误判（不算复核） */
     kind: text("kind").notNull(),
+    /** MANUAL：手工记录；AI：AI 新闻监控写入（§7） */
+    origin: text("origin").notNull().default("MANUAL"),
     /** 事件发生日（YYYY-MM-DD，上海时区），不晚于记录当天 */
     occurredOn: text("occurred_on").notNull(),
     summary: text("summary").notNull(),
@@ -323,4 +331,38 @@ export const thesisEvents = sqliteTable(
     recordedAt: text("recorded_at").notNull(),
   },
   (table) => [index("thesis_events_thesis_idx").on(table.thesisId, table.recordedAt)],
+);
+
+/**
+ * AI 新闻监控看过的每一篇文章（§7）：既用于展示，也用于去重——同一链接对同一份逻辑只判断一次。
+ * verdict：TRIGGER 已自动触发；POSSIBLE 可能触发、等你一键确认；RELATED 相关；IRRELEVANT 无关（不展示）。
+ */
+export const newsItems = sqliteTable(
+  "news_items",
+  {
+    id: text("id").primaryKey(),
+    thesisId: text("thesis_id").notNull().references(() => holdingTheses.id, { onDelete: "cascade" }),
+    /** 规范化后的链接（去掉锚点与跟踪参数） */
+    url: text("url").notNull(),
+    title: text("title").notNull(),
+    siteName: text("site_name"),
+    /** 发布日期（YYYY-MM-DD，上海时区）；搜索结果没有日期时为 null */
+    publishedOn: text("published_on"),
+    /** AI 写的一句话事实摘要；没有时用搜索摘要 */
+    summary: text("summary").notNull(),
+    verdict: text("verdict").notNull(),
+    breakerId: text("breaker_id").references(() => thesisBreakers.id, { onDelete: "set null" }),
+    /** 自动触发时从原文逐字摘录的证据 */
+    evidence: text("evidence"),
+    /** 搜索结果的来源权威度（-1 未知，0–4，越大越权威） */
+    authority: integer("authority"),
+    eventId: text("event_id").references(() => thesisEvents.id, { onDelete: "set null" }),
+    /** OPEN；CONFIRMED（你确认了可能触发）；DISMISSED（你判定为误判或忽略） */
+    status: text("status").notNull().default("OPEN"),
+    foundAt: text("found_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("news_items_thesis_url_unique").on(table.thesisId, table.url),
+    index("news_items_thesis_idx").on(table.thesisId, table.foundAt),
+  ],
 );

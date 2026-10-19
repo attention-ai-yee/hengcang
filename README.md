@@ -7,7 +7,7 @@
 当前仓库完成了 MVP 的可运行框架：
 
 - Next.js App Router、TypeScript、Tailwind CSS 与响应式产品导航；
-- SQLite + Drizzle ORM，包含 18 张核心业务表和 7 个版本化 migration；
+- SQLite + Drizzle ORM，包含 19 张核心业务表和 8 个版本化 migration；
 - 手工资产模板、持仓 CRUD API、资产汇总、目标偏离和未拆分账户警告；
 - Dashboard、资产评分、持仓与风险、决策日志、回测、数据状态和设置页面（再平衡已并入持仓页）；
 - Manual、Tushare、FRED、Twelve Data、WGC Goldhub Provider Adapter 边界；
@@ -16,6 +16,7 @@
 - 无前视滚动百分位与数据新鲜度闸门、缺失指标重权、70/30 配置吸引力分（便宜程度/趋势）、硬仓位规则（单股 8% / 主题 ETF 15% / 单一主题 20%）接入评分状态、3 日确认和 7 天冷却；
 - `reserved_cash` 预留资金与基于可投资资产的仓位计算；
 - 持仓级投资逻辑、失效条件与事件日志：单一个股和主题 ETF 必写；消息对应到失效条件即暂停新增，写完复核才解除；
+- AI 新闻监控（DeepSeek 搜索 + 模型）：每天自动搜索持仓新闻、对照失效条件判断，证据确凿的自动暂停新增，其余一键确认或忽略，误判一键撤销；
 - 资产汇总、单股/主题 ETF 上限和规范案例 A–E 单元测试；
 - Tushare 自动纵切：近 5 年行情、指数估值、实际利率、派生指标、观察值入库与 ScoreSnapshot；
 - Manual CSV/JSON 预览、幂等提交和手工覆盖优先级；
@@ -48,7 +49,8 @@ pnpm db:migrate    # 应用 migration
 pnpm db:seed       # 写入本地示例资产模板
 pnpm data:refresh  # 自动拉取 Tushare 数据并重算评分
 pnpm backtest      # 只读回测报告（--persist 落库，--cost N 覆盖成本假设）
-pnpm worker        # 常驻定时刷新进程（每 6 小时一轮，Ctrl+C 退出）
+pnpm worker        # 常驻定时进程：每 6 小时刷新数据，并每天扫描一次新闻（Ctrl+C 退出）
+pnpm news:scan     # AI 新闻监控：扫描到期的投资逻辑（--force 立即扫描全部）
 ```
 
 ## 环境变量
@@ -62,6 +64,8 @@ pnpm worker        # 常驻定时刷新进程（每 6 小时一轮，Ctrl+C 退�
 | `TUSHARE_TOKEN` | A 股、ETF、基金等 Tushare 数据 |
 | `FRED_API_KEY` | FRED 宏观序列 |
 | `TWELVE_DATA_API_KEY` | 黄金代理与全球行情 |
+| `DEEPSEEK_API_KEY` | AI 新闻监控：DeepSeek 搜索、抓取与模型共用一个 Key |
+| `DEEPSEEK_MODEL` | 可选：判断用的模型，默认 `deepseek-flash` |
 | `TUSHARE_*_PROXY` | 可选：覆盖四类资产的默认评分代理代码 |
 
 API Key 只能放在服务端环境变量中。Settings 页面仅显示是否已配置，不接收或持久化密钥。
@@ -106,6 +110,8 @@ OpportunityScore = 70% × Cheapness + 30% × Trend
 ## 投资逻辑与失效条件
 
 消息不会自动变成分数。在“持仓与风险”页点进某个持仓（`/holdings/[id]`），写下投资逻辑和 3–5 条可验证的失效条件；之后有消息就记录一条事件（日期、摘要、来源链接），对应到某条失效条件即触发：该持仓暂停新增，写一条 WARNING 信号，仪表盘常驻提醒，直到写完复核解除。已触发的条件不能删改；每 90 天提示一次季度复核。暂停是持仓级的，不改变所在资产桶的评分。详见 [v2 设计说明 §4](docs/hengcang_v2_allocation_fundamentals_thesis.md)。
+
+配置 `DEEPSEEK_API_KEY` 后，消息不用你自己找：AI 每天自动搜索每只持仓最近 30 天的新闻，先按摘要初筛，再带正文复核。只有复核高置信、证据能在原文里逐字找到、30 天内、来源可靠的才自动触发；其余标为「可能触发」，一键确认或忽略。AI 触发的可以一键撤销（不算复核）。没写逻辑的持仓可以「让 AI 起草」。发给 DeepSeek 的只有持仓名称、代码、逻辑和条件，不含金额。详见 [v2 设计说明 §7](docs/hengcang_v2_allocation_fundamentals_thesis.md)。
 
 ## Manual 指标导入（高级兜底）
 

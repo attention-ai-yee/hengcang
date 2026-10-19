@@ -21,6 +21,7 @@ export async function GET() {
       tushare: Boolean(process.env.TUSHARE_TOKEN),
       fred: Boolean(process.env.FRED_API_KEY),
       twelveData: Boolean(process.env.TWELVE_DATA_API_KEY),
+      deepseek: Boolean(process.env.DEEPSEEK_API_KEY),
     },
   });
 }

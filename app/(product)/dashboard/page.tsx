@@ -72,6 +72,7 @@ export default async function DashboardPage() {
                 <StatusPill tone={item.kind === "BREACHED" ? "danger" : "warn"}>{THESIS_ATTENTION_LABELS[item.kind]}</StatusPill>
                 <strong>{item.name}</strong>
                 {item.triggered.length > 0 && <span className="text-[#68756e]">触发：{item.triggered.join("；")}</span>}
+                {item.kind === "NEWS_TO_CONFIRM" && <span className="text-[#68756e]">{item.pendingNews} 条新闻</span>}
                 <Link href={`/holdings/${item.holdingId}`} className="text-xs font-semibold text-[#315f4d] underline">去处理</Link>
               </li>
             ))}

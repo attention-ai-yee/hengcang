@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { MAX_THESIS_BREAKERS } from "@/domain/thesis";
 import { shanghaiDate } from "@/lib/shanghai";
+import { draftThesisAction } from "@/server/actions/news";
 
 interface BreakerItem {
   id?: string;
@@ -20,13 +21,38 @@ async function readError(response: Response, fallback: string): Promise<string> 
   return field ?? body?.error?.message ?? fallback;
 }
 
-/** 投资逻辑 + 失效条件编辑：已触发的条件锁定（不能改写、不能删除），先写复核解除。 */
-export function ThesisEditor({ holdingId, initialThesis, initialBreakers }: { holdingId: string; initialThesis: string; initialBreakers: BreakerItem[] }) {
+/**
+ * 投资逻辑 + 失效条件编辑：已触发的条件锁定（不能改写、不能删除），先写复核解除。
+ * aiDraft：还没写过逻辑且配置了 DeepSeek 时，可以让 AI 起草（只填进编辑框，保存与否由你决定）。
+ */
+export function ThesisEditor({ holdingId, initialThesis, initialBreakers, aiDraft = false }: { holdingId: string; initialThesis: string; initialBreakers: BreakerItem[]; aiDraft?: boolean }) {
   const router = useRouter();
   const [thesis, setThesis] = useState(initialThesis);
   const [breakers, setBreakers] = useState<BreakerItem[]>(initialBreakers.length > 0 ? initialBreakers : [{ description: "" }]);
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+
+  async function draft() {
+    const hasContent = thesis.trim() !== "" || breakers.some((item) => item.description.trim() !== "");
+    if (hasContent && !window.confirm("用 AI 草稿替换编辑框里的内容？（不会自动保存）")) return;
+    setDrafting(true);
+    setStatus("AI 起草中，通常需要十几秒…");
+    try {
+      const result = await draftThesisAction(holdingId);
+      if (!result.ok) {
+        setStatus(result.message);
+        return;
+      }
+      setThesis(result.thesis);
+      setBreakers(result.breakers.map((description) => ({ description })));
+      setStatus("草稿已填好：请逐条核对、修改后再保存");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "起草失败");
+    } finally {
+      setDrafting(false);
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -81,7 +107,12 @@ export function ThesisEditor({ holdingId, initialThesis, initialBreakers }: { ho
         )}
       </div>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" disabled={saving} onClick={save} className={buttonClass}>保存投资逻辑</button>
+        <button type="button" disabled={saving || drafting} onClick={save} className={buttonClass}>保存投资逻辑</button>
+        {aiDraft && (
+          <button type="button" disabled={saving || drafting} onClick={() => void draft()} className="rounded-xl border border-[#cfd8d2] px-4 py-2.5 text-sm font-semibold text-[#315f4d] disabled:opacity-60">
+            {drafting ? "起草中…" : "让 AI 起草"}
+          </button>
+        )}
         <span className="text-sm text-[#66736d]" aria-live="polite">{status}</span>
       </div>
     </div>

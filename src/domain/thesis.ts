@@ -79,7 +79,7 @@ export function planBreakerChanges(
   return { ok: true, update, insert, remove: remove.map((breaker) => breaker.id) };
 }
 
-export type ThesisAttentionKind = "BREACHED" | "REVIEW_DUE" | "MISSING";
+export type ThesisAttentionKind = "BREACHED" | "NEWS_TO_CONFIRM" | "REVIEW_DUE" | "MISSING";
 
 export interface ThesisAttentionItem {
   holdingId: string;
@@ -87,23 +87,27 @@ export interface ThesisAttentionItem {
   kind: ThesisAttentionKind;
   /** 已触发、等待复核的失效条件（仅 BREACHED） */
   triggered: string[];
+  /** AI 发现、等你确认的「可能触发」新闻条数 */
+  pendingNews: number;
 }
 
-const ATTENTION_ORDER: Record<ThesisAttentionKind, number> = { BREACHED: 0, REVIEW_DUE: 1, MISSING: 2 };
+const ATTENTION_ORDER: Record<ThesisAttentionKind, number> = { BREACHED: 0, NEWS_TO_CONFIRM: 1, REVIEW_DUE: 2, MISSING: 3 };
 
 /**
- * 首页常驻提醒：触发未复核（暂停新增）在前，其次季度复核到期，最后是集中持仓没写逻辑。
- * 信号流只显示最近几条，触发信号会被后来的评分信号挤掉；这里按当前状态显示，处理完才消失。
+ * 首页常驻提醒：触发未复核（暂停新增）在前，其次 AI 发现可能触发、等你确认，再次季度复核到期，
+ * 最后是集中持仓没写逻辑。信号流只显示最近几条，会被后来的评分信号挤掉；这里按当前状态显示，处理完才消失。
  */
 export function thesisAttention(
   holdings: Array<{ id: string; name: string; isSingleStock: boolean; isThematicEtf: boolean }>,
-  summaries: Map<string, { status: ThesisStatus; reviewDue: boolean; triggered: string[] }>,
+  summaries: Map<string, { status: ThesisStatus; reviewDue: boolean; triggered: string[]; pendingNews?: number }>,
 ): ThesisAttentionItem[] {
   const items: ThesisAttentionItem[] = [];
   for (const holding of holdings) {
     const summary = summaries.get(holding.id);
-    const base = { holdingId: holding.id, name: holding.name, triggered: [] as string[] };
+    const pendingNews = summary?.pendingNews ?? 0;
+    const base = { holdingId: holding.id, name: holding.name, triggered: [] as string[], pendingNews };
     if (summary?.status === "BREACHED") items.push({ ...base, kind: "BREACHED", triggered: summary.triggered });
+    else if (pendingNews > 0) items.push({ ...base, kind: "NEWS_TO_CONFIRM" });
     else if (summary?.reviewDue) items.push({ ...base, kind: "REVIEW_DUE" });
     else if (!summary && needsThesis(holding)) items.push({ ...base, kind: "MISSING" });
   }

@@ -86,14 +86,29 @@ describe("thesisAttention", () => {
       { id: "5", name: "已触发", ...stock },
     ];
     const summaries = new Map([
-      ["3", { status: "INTACT" as const, reviewDue: true, triggered: [] }],
-      ["4", { status: "INTACT" as const, reviewDue: false, triggered: [] }],
-      ["5", { status: "BREACHED" as const, reviewDue: true, triggered: ["最大客户订单明显缩减"] }],
+      ["3", { status: "INTACT" as const, reviewDue: true, triggered: [], pendingNews: 0 }],
+      ["4", { status: "INTACT" as const, reviewDue: false, triggered: [], pendingNews: 0 }],
+      ["5", { status: "BREACHED" as const, reviewDue: true, triggered: ["最大客户订单明显缩减"], pendingNews: 0 }],
     ]);
     expect(thesisAttention(holdings, summaries)).toEqual([
-      { holdingId: "5", name: "已触发", kind: "BREACHED", triggered: ["最大客户订单明显缩减"] },
-      { holdingId: "3", name: "复核到期", kind: "REVIEW_DUE", triggered: [] },
-      { holdingId: "1", name: "没写逻辑的个股", kind: "MISSING", triggered: [] },
+      { holdingId: "5", name: "已触发", kind: "BREACHED", triggered: ["最大客户订单明显缩减"], pendingNews: 0 },
+      { holdingId: "3", name: "复核到期", kind: "REVIEW_DUE", triggered: [], pendingNews: 0 },
+      { holdingId: "1", name: "没写逻辑的个股", kind: "MISSING", triggered: [], pendingNews: 0 },
+    ]);
+  });
+
+  it("AI 发现可能触发、等你确认的排在复核到期前面（触发未复核仍最优先）", () => {
+    const holdings = [
+      { id: "a", name: "复核到期且有待确认新闻", ...stock },
+      { id: "b", name: "只是复核到期", ...stock },
+    ];
+    const summaries = new Map([
+      ["a", { status: "INTACT" as const, reviewDue: true, triggered: [], pendingNews: 2 }],
+      ["b", { status: "INTACT" as const, reviewDue: true, triggered: [], pendingNews: 0 }],
+    ]);
+    expect(thesisAttention(holdings, summaries).map((item) => [item.holdingId, item.kind, item.pendingNews])).toEqual([
+      ["a", "NEWS_TO_CONFIRM", 2],
+      ["b", "REVIEW_DUE", 0],
     ]);
   });
 });

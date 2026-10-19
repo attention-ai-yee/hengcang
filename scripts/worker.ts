@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { runNewsScan } from "./news-scan";
 import { runRefresh } from "./refresh";
 
 /**
@@ -23,15 +24,30 @@ async function tick(): Promise<void> {
   }
   inFlight = true;
   try {
-    const report = await runRefresh();
-    console.log(new Date().toISOString(), JSON.stringify({
-      provider: report.provider,
-      status: report.status,
-      inserted: report.inserted,
-      updated: report.updated,
-    }));
-  } catch (error) {
-    console.error("Scheduled refresh failed", error);
+    try {
+      const report = await runRefresh();
+      console.log(new Date().toISOString(), JSON.stringify({
+        provider: report.provider,
+        status: report.status,
+        inserted: report.inserted,
+        updated: report.updated,
+      }));
+    } catch (error) {
+      console.error("Scheduled refresh failed", error);
+    }
+    // AI 新闻监控（§7）：每份投资逻辑距上次扫描满 20 小时才扫，即每天约一次；没配置 Key 时只记状态。
+    try {
+      const news = await runNewsScan();
+      console.log(new Date().toISOString(), JSON.stringify({
+        provider: "deepseek-news",
+        status: news.status,
+        scanned: news.scanned,
+        triggered: news.triggered,
+        possible: news.possible,
+      }));
+    } catch (error) {
+      console.error("Scheduled news scan failed", error);
+    }
   } finally {
     inFlight = false;
   }
@@ -64,7 +80,7 @@ function startWorker(): void {
       process.exit(0);
     });
   }
-  console.log("Local refresh worker started; interval: 6 hours.");
+  console.log("Local refresh worker started; interval: 6 hours (data refresh + daily news scan).");
 }
 
 // 仅在直接执行（`pnpm worker`）时启动：被测试或其它模块导入时不得注册常驻

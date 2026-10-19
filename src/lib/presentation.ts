@@ -59,6 +59,7 @@ export const HEALTH_CHECK_STATUS_LABELS: Record<HealthCheckStatus, string> = {
 
 export const THESIS_ATTENTION_LABELS: Record<ThesisAttentionKind, string> = {
   BREACHED: "逻辑待复核：暂停新增",
+  NEWS_TO_CONFIRM: "AI 发现可能触发：待确认",
   REVIEW_DUE: "季度复核到期",
   MISSING: "未写投资逻辑",
 };

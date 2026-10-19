@@ -84,7 +84,9 @@ export default async function HoldingsPage() {
 function ThesisCell({ holdingId, summary, required }: { holdingId: string; summary?: ThesisSummary; required: boolean }) {
   const pill = summary?.status === "BREACHED"
     ? <StatusPill tone="danger">{THESIS_ATTENTION_LABELS.BREACHED}</StatusPill>
-    : summary?.status === "INTACT"
+    : summary && summary.pendingNews > 0
+      ? <StatusPill tone="warn">{THESIS_ATTENTION_LABELS.NEWS_TO_CONFIRM}</StatusPill>
+      : summary?.status === "INTACT"
       ? <StatusPill tone={summary.reviewDue ? "warn" : "good"}>{summary.reviewDue ? THESIS_ATTENTION_LABELS.REVIEW_DUE : "逻辑完好"}</StatusPill>
       : required
         ? <StatusPill tone="warn">{THESIS_ATTENTION_LABELS.MISSING}</StatusPill>

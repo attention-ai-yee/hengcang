@@ -73,5 +73,6 @@ function formatCapabilities(raw: string) {
 function statusMeaning(code: string) {
   if (code === "PERMISSION_DENIED") return "权限不足：已保留旧数据并尝试可用的聚合/代理降级";
   if (code === "PARTIAL_FAILURE") return "部分数据不可用：请区分缺失、权限或代理项";
+  if (code === "NOT_CONFIGURED") return "未配置：在 .env.local 填写对应的 Key 并重启后生效";
   return code;
 }

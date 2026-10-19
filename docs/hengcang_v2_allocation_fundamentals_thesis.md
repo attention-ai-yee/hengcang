@@ -1,7 +1,7 @@
 # 衡仓 v2：默认配置、基本面体检与持仓投资逻辑
 
 **日期**：2026-10-18
-**分支**：`claude/fundamentals-thesis-v2`
+**分支**：`claude/fundamentals-thesis-v2`（2026-10-19 已快进合并到 `main`，合并前的 `main` 是 `8ef4160`）
 **依据**：etf-trend 仓库 `research/hengcang/README.md`（配置回测与基本面模块复核，读的是本仓库 `8ef4160`）
 **评分配置**：`src/domain/scoring/default-config.json` version 5 → 6
 
@@ -215,12 +215,12 @@ v2 的做法：**事先写下「为什么持有」和「什么情况说明逻辑
 ## 5. 升级步骤
 
 1. 停掉开发服务器和 `pnpm worker`，**先备份数据库**：`cp data/hengcang.db data/hengcang.before-v2.db`。
-2. `git fetch origin && git checkout claude/fundamentals-thesis-v2`，然后 `pnpm install`、`pnpm db:migrate`（依次执行 0004–0006）。
+2. `git checkout main && git pull`，然后 `pnpm install`、`pnpm db:migrate`（依次执行 0004–0006）。
 3. 运行一次 `pnpm data:refresh`（或页面「一键自动刷新评分」）：升级后第一次刷新会做财报增量刷新，并用 v6 规则重算评分。
 4. 打开「设置」核对战略仓位应为 v2 默认值（海外权益 25%）。如果显示海外 0%，说明数据库里的目标改过，迁移没有覆盖，需要同样直接改库。
 5. 在「持仓与风险」里给单一个股和主题 ETF 写投资逻辑和失效条件。
 
-要回到 v1：停服务，`git checkout main`，把备份文件拷回 `data/hengcang.db`。
+要回到 v1：停服务，`git checkout 8ef4160`（v2 合并前的 main），把备份文件拷回 `data/hengcang.db`。
 
 ---
 

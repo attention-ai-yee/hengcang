@@ -83,16 +83,35 @@ describe("Fetch", () => {
 });
 
 describe("Chat（JSON 输出）", () => {
-  it("默认模型 deepseek-flash，response_format=json_object，解析 JSON", async () => {
+  it("默认模型 deepseek-flash，response_format=json_object，默认关闭思考；解析 JSON", async () => {
     const { deepseek, calls } = client([{ status: 200, body: { choices: [{ message: { content: "{\"queries\":[\"先导智能\"]}" }, finish_reason: "stop" }] } }]);
     expect(await deepseek.chatJson([{ role: "user", content: "只输出 JSON" }])).toEqual({ queries: ["先导智能"] });
     expect(calls[0].url).toBe("https://api.deepseek.com/chat/completions");
-    expect(calls[0].body).toMatchObject({ model: "deepseek-flash", response_format: { type: "json_object" }, stream: false });
+    expect(calls[0].body).toMatchObject({ model: "deepseek-flash", response_format: { type: "json_object" }, stream: false, thinking: { type: "disabled" } });
+    expect(calls[0].body).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("复核时开低强度思考（reasoning_effort=low，不再显式关闭思考）", async () => {
+    const { deepseek, calls } = client([{ status: 200, body: { choices: [{ message: { content: "{}", reasoning_content: "思考过程" }, finish_reason: "stop" }] } }]);
+    expect(await deepseek.chatJson([], { thinking: true })).toEqual({});
+    expect(calls[0].body).toMatchObject({ reasoning_effort: "low" });
+    expect(calls[0].body).not.toHaveProperty("thinking");
+  });
+
+  it("官方说 JSON 输出偶尔返回空内容：空内容重试一次，两次都空才报错", async () => {
+    const empty = { status: 200, body: { choices: [{ message: { content: "" }, finish_reason: "stop" }] } };
+    const ok = { status: 200, body: { choices: [{ message: { content: "{\"a\":1}" }, finish_reason: "stop" }] } };
+    const recovered = client([empty, ok]);
+    expect(await recovered.deepseek.chatJson([])).toEqual({ a: 1 });
+    expect(recovered.calls).toHaveLength(2);
+    const failing = client([empty, empty]);
+    await expect(failing.deepseek.chatJson([])).rejects.toThrow("没有返回内容");
+    expect(failing.calls).toHaveLength(2);
   });
 
   it("被截断、空内容、不是 JSON 都报错", async () => {
     await expect(client([{ status: 200, body: { choices: [{ message: { content: "{\"a\":" }, finish_reason: "length" }] } }]).deepseek.chatJson([])).rejects.toThrow("截断");
-    await expect(client([{ status: 200, body: { choices: [{ message: { content: "" } }] } }]).deepseek.chatJson([])).rejects.toThrow("没有返回内容");
+    await expect(client([{ status: 200, body: { choices: [{ message: { content: "" } }] } }, { status: 200, body: { choices: [{ message: { content: "" } }] } }]).deepseek.chatJson([])).rejects.toThrow("没有返回内容");
     await expect(client([{ status: 200, body: { choices: [{ message: { content: "不是 JSON" } }] } }]).deepseek.chatJson([])).rejects.toThrow("不是有效 JSON");
   });
 });

@@ -221,13 +221,14 @@ async function scanThesis(client: NewsClient, thesis: ThesisRow, holding: Holdin
         let content = candidate.content;
         if (!content.trim()) content = (await client.fetchPage(candidate.url)).content;
         if (!content.trim()) continue;
+        // 只有这一步可能自动触发：开低强度思考换判断质量（其余调用关闭思考，保证「立即检查」够快）
         const verification = parseVerification(await client.chatJson(buildVerificationMessages({
           today,
           holding: promptHolding(holding),
           breakerDescription: breaker.description,
           candidate,
           content,
-        })));
+        }), { thinking: true }));
         const decision = decideTrigger({
           verification,
           content,

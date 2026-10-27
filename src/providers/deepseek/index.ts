@@ -6,7 +6,9 @@
  *   结果含 title、url、snippet、summary（约 600–800 字）、content、site_name、date（UTC RFC 3339，可能为 null）、
  *   authority（-1 未知，0–4）、rerank_score（0–3）。
  * - Fetch：POST /v1/tools/fetch，返回页面标题与 Markdown 正文；403 = 网站拒绝抓取，404 = 没有可用内容。
- * - Chat：POST /chat/completions，JSON 输出用 response_format: { type: "json_object" }，提示词里必须写明要 JSON。
+ * - Chat：POST /chat/completions，JSON 输出用 response_format: { type: "json_object" }，提示词里必须写明要 JSON；
+ *   官方说明 JSON 输出偶尔会返回空内容（此时重试一次）。思考模式默认开启：生成搜索词、初筛、起草关掉
+ *   （thinking: { type: "disabled" }，快），带正文复核用低强度思考（reasoning_effort: "low"）。
  * - 408 / 429 / 5xx 按文档建议等待后重试；401（Key 无效）、402（余额不足）及其它 4xx 不重试。
  * 计费：Search、Fetch 各按每 1000 次成功请求 5 元，与对话 token 共用账户余额。
  *
@@ -41,7 +43,8 @@ export interface NewsClient {
   readonly model: string;
   search(query: string, options?: { count?: number; needContent?: boolean }): Promise<DeepSeekSearchResult[]>;
   fetchPage(url: string): Promise<{ title: string; content: string }>;
-  chatJson(messages: ChatMessage[]): Promise<unknown>;
+  /** thinking：true = 低强度思考（只用于带正文复核）；默认关闭思考 */
+  chatJson(messages: ChatMessage[], options?: { thinking?: boolean }): Promise<unknown>;
 }
 
 export class DeepSeekError extends Error {
@@ -127,21 +130,31 @@ export class DeepSeekClient implements NewsClient {
     };
   }
 
-  async chatJson(messages: ChatMessage[]): Promise<unknown> {
-    const body = (await this.post("/chat/completions", {
+  async chatJson(messages: ChatMessage[], options: { thinking?: boolean } = {}): Promise<unknown> {
+    const payload = {
       model: this.model,
       messages,
       response_format: { type: "json_object" },
       stream: false,
-    }, 180_000)) as { choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }> } | null;
-    const choice = body?.choices?.[0];
-    if (choice?.finish_reason === "length") throw new DeepSeekError(200, "模型输出被截断（finish_reason=length）");
-    const content = choice?.message?.content;
-    if (typeof content !== "string" || !content.trim()) throw new DeepSeekError(200, "模型没有返回内容");
-    try {
-      return JSON.parse(content) as unknown;
-    } catch {
-      throw new DeepSeekError(200, "模型返回的不是有效 JSON");
+      ...(options.thinking ? { reasoning_effort: "low" } : { thinking: { type: "disabled" } }),
+    };
+    // 官方：JSON 输出偶尔返回空内容——空内容再试一次，仍为空才报错
+    for (let attempt = 0; ; attempt += 1) {
+      const body = (await this.post("/chat/completions", payload, 180_000)) as {
+        choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>;
+      } | null;
+      const choice = body?.choices?.[0];
+      if (choice?.finish_reason === "length") throw new DeepSeekError(200, "模型输出被截断（finish_reason=length）");
+      const content = choice?.message?.content;
+      if (typeof content !== "string" || !content.trim()) {
+        if (attempt < 1) continue;
+        throw new DeepSeekError(200, "模型没有返回内容");
+      }
+      try {
+        return JSON.parse(content) as unknown;
+      } catch {
+        throw new DeepSeekError(200, "模型返回的不是有效 JSON");
+      }
     }
   }
 

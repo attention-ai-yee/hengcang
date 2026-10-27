@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import type { z } from "zod";
 import { getDatabase } from "@/db/client";
 import { DEFAULT_PORTFOLIO_ID } from "@/db/queries";
@@ -110,6 +110,14 @@ export async function saveThesis(holdingId: string, payload: ThesisPayload, now 
     }
     for (const item of plan.update) {
       tx.update(thesisBreakers).set({ description: item.description, position: item.position, updatedAt: timestamp }).where(eq(thesisBreakers.id, item.id)).run();
+    }
+    // 条件删掉或改写后，AI 按旧条件标的「可能触发」不再适用：一并忽略，免得提醒挂着又没法处理
+    const rewritten = plan.update.filter((item) => existing.find((breaker) => breaker.id === item.id)?.description !== item.description).map((item) => item.id);
+    const obsolete = [...plan.remove, ...rewritten];
+    if (obsolete.length > 0) {
+      tx.update(newsItems).set({ status: "DISMISSED" })
+        .where(and(inArray(newsItems.breakerId, obsolete), eq(newsItems.verdict, "POSSIBLE"), eq(newsItems.status, "OPEN")))
+        .run();
     }
     if (plan.remove.length > 0) tx.delete(thesisBreakers).where(inArray(thesisBreakers.id, plan.remove)).run();
     for (const item of plan.insert) {
@@ -257,8 +265,9 @@ export async function listThesisSummaries(today = shanghaiDate()): Promise<Map<s
   const ids = theses.map((thesis) => thesis.id);
   const breakers = db.select().from(thesisBreakers).where(inArray(thesisBreakers.thesisId, ids)).orderBy(asc(thesisBreakers.position)).all();
   const reviews = db.select().from(thesisEvents).where(and(inArray(thesisEvents.thesisId, ids), eq(thesisEvents.kind, "REVIEW"))).all();
+  // 只数还能确认的：对应条件已经不在的（旧数据）只能忽略，不再挂提醒
   const pending = db.select({ thesisId: newsItems.thesisId }).from(newsItems)
-    .where(and(inArray(newsItems.thesisId, ids), eq(newsItems.verdict, "POSSIBLE"), eq(newsItems.status, "OPEN"))).all();
+    .where(and(inArray(newsItems.thesisId, ids), eq(newsItems.verdict, "POSSIBLE"), eq(newsItems.status, "OPEN"), isNotNull(newsItems.breakerId))).all();
   return new Map(theses.map((thesis) => {
     const own = breakers.filter((breaker) => breaker.thesisId === thesis.id);
     const reviewedOn = lastReviewOn(reviews.filter((event) => event.thesisId === thesis.id));

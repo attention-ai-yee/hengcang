@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, lt, ne } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
 import { DEFAULT_PORTFOLIO_ID } from "@/db/queries";
-import { dataSourceStatus, holdings, holdingTheses, newsItems, thesisBreakers } from "@/db/schema";
+import { dataSourceStatus, holdings, holdingTheses, newsItems, thesisBreakers, thesisEvents } from "@/db/schema";
 import {
   breakerLabels,
   buildDraftMessages,
+  clearedBefore,
   buildQueryMessages,
   buildScreeningMessages,
   buildSearchQuery,
@@ -167,6 +168,19 @@ async function scanThesis(client: NewsClient, thesis: ThesisRow, holding: Holdin
   const today = shanghaiDate(now);
   const warnings: string[] = [];
   const breakers = db.select().from(thesisBreakers).where(eq(thesisBreakers.thesisId, thesis.id)).orderBy(asc(thesisBreakers.position)).all();
+  // 每条条件最近一次被你复核或撤销误判的日期：不晚于这一天的事件不再触发它（同一条新闻换个网站转载）
+  const dismissals = db.select({ breakerId: thesisEvents.breakerId, recordedAt: thesisEvents.recordedAt })
+    .from(thesisEvents)
+    .where(and(eq(thesisEvents.thesisId, thesis.id), eq(thesisEvents.kind, "DISMISS")))
+    .all();
+  const clearedOn = new Map<string, string>();
+  for (const breaker of breakers) {
+    const latest = [breaker.lastReviewedAt, ...dismissals.filter((row) => row.breakerId === breaker.id).map((row) => row.recordedAt)]
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1);
+    if (latest) clearedOn.set(breaker.id, shanghaiDate(new Date(latest)));
+  }
   const queries = await ensureQueries(client, thesis, holding, breakers.map((breaker) => breaker.description), warnings);
 
   const afterDay = dayBefore(today, NEWS_MAX_AGE_DAYS);
@@ -203,17 +217,23 @@ async function scanThesis(client: NewsClient, thesis: ThesisRow, holding: Holdin
       candidates.length,
       labels,
     );
-    const decisions = new Map<number, Decision>(screening.map((item) => [item.index, {
-      verdict: item.verdict,
-      breakerId: item.breakerId,
-      summary: item.summary,
-      evidence: null,
-      occurredOn: null,
-    }]));
+    // 格式不对就让这一轮失败（不标记扫描过，下一轮重试），不能把全部文章当「无关」标成看过
+    if (!screening) throw new Error("模型初筛返回的格式不对，下一轮重试");
+    const decisions = new Map<number, Decision>(screening.map((item) => {
+      // 已复核 / 撤销过的条件：更早发布的文章只算相关，不再进待确认
+      const stale = item.verdict === "POSSIBLE" && item.breakerId !== null && clearedBefore(candidates[item.index].publishedOn, clearedOn.get(item.breakerId));
+      return [item.index, {
+        verdict: stale ? "RELATED" : item.verdict,
+        breakerId: stale ? null : item.breakerId,
+        summary: item.summary,
+        evidence: null,
+        occurredOn: null,
+      }];
+    }));
 
     // 带正文复核：候选已按 rerank_score 排序，最多复核前几篇「可能触发」，其余留给你确认
     const triggeredNow = new Set<string>();
-    for (const item of screening.filter((entry) => entry.verdict === "POSSIBLE").slice(0, NEWS_MAX_VERIFICATIONS)) {
+    for (const item of screening.filter((entry) => decisions.get(entry.index)?.verdict === "POSSIBLE").slice(0, NEWS_MAX_VERIFICATIONS)) {
       const candidate = candidates[item.index];
       const breaker = active.find((entry) => entry.id === item.breakerId);
       if (!breaker) continue;
@@ -235,6 +255,7 @@ async function scanThesis(client: NewsClient, thesis: ThesisRow, holding: Holdin
           publishedOn: candidate.publishedOn,
           authority: candidate.authority,
           breakerActive: !triggeredNow.has(breaker.id),
+          clearedOn: clearedOn.get(breaker.id) ?? null,
           today,
         });
         if (decision.verdict === "TRIGGER") triggeredNow.add(breaker.id);

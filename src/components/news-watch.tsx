@@ -39,8 +39,8 @@ export function NewsScanButton({ holdingId }: { holdingId: string }) {
   );
 }
 
-/** 「可能触发」：一键确认（触发对应条件）或忽略。 */
-export function NewsDecisionButtons({ newsItemId, breakerDescription }: { newsItemId: string; breakerDescription: string }) {
+/** 「可能触发」：一键确认（触发对应条件）或忽略；对应条件已经删掉的只能忽略。 */
+export function NewsDecisionButtons({ newsItemId, breakerDescription }: { newsItemId: string; breakerDescription?: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -55,9 +55,11 @@ export function NewsDecisionButtons({ newsItemId, breakerDescription }: { newsIt
 
   return (
     <span className="flex flex-wrap items-center gap-2">
-      <button type="button" disabled={busy} onClick={() => void decide(() => confirmNewsAction(newsItemId))} className={`${smallButton} border-[#efc8c3] text-[#91352f]`}>
-        确认触发「{breakerDescription}」
-      </button>
+      {breakerDescription ? (
+        <button type="button" disabled={busy} onClick={() => void decide(() => confirmNewsAction(newsItemId))} className={`${smallButton} border-[#efc8c3] text-[#91352f]`}>
+          确认触发「{breakerDescription}」
+        </button>
+      ) : <span className="text-xs text-[#7a867f]">对应的失效条件已删除</span>}
       <button type="button" disabled={busy} onClick={() => void decide(() => dismissNewsAction(newsItemId))} className={smallButton}>忽略</button>
       {message && <span className="text-xs text-[#66736d]" aria-live="polite">{message}</span>}
     </span>

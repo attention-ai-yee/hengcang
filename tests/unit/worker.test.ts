@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { REFRESH_INTERVAL_MS, scheduleNextTick } from "../../scripts/worker";
+import { CHECK_INTERVAL_MS, REFRESH_INTERVAL_MS, refreshDue, scheduleNextTick } from "../../scripts/worker";
 
 /**
  * 回归：`pnpm worker` 启动即退出（数据新鲜度修复）。
@@ -64,3 +64,30 @@ describe("worker 常驻刷新调度（启动即退出回归）", () => {
     }
   });
 });
+
+describe("refreshDue（按墙钟时间判断是否到期，休眠、重启都不耽误）", () => {
+  const now = new Date("2026-10-28T10:00:00Z");
+  const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
+
+  it("每 30 分钟检查一次；从没刷新过 → 到期", () => {
+    expect(CHECK_INTERVAL_MS).toBe(30 * 60 * 1000);
+    expect(refreshDue(null, now)).toBe(true);
+    expect(refreshDue({ lastSuccessAt: null, lastAttemptAt: null }, now)).toBe(true);
+  });
+
+  it("上次成功满 6 小时才到期", () => {
+    expect(refreshDue({ lastSuccessAt: hoursAgo(5.9), lastAttemptAt: hoursAgo(5.9) }, now)).toBe(false);
+    expect(refreshDue({ lastSuccessAt: hoursAgo(6), lastAttemptAt: hoursAgo(6) }, now)).toBe(true);
+  });
+
+  it("上次尝试失败后隔 1 小时再试", () => {
+    expect(refreshDue({ lastSuccessAt: hoursAgo(9), lastAttemptAt: hoursAgo(0.5) }, now)).toBe(false);
+    expect(refreshDue({ lastSuccessAt: hoursAgo(9), lastAttemptAt: hoursAgo(1) }, now)).toBe(true);
+    expect(refreshDue({ lastSuccessAt: null, lastAttemptAt: hoursAgo(0.2) }, now)).toBe(false);
+  });
+
+  it("时间戳坏了按从没刷新处理", () => {
+    expect(refreshDue({ lastSuccessAt: "坏数据", lastAttemptAt: "坏数据" }, now)).toBe(true);
+  });
+});
+

@@ -173,6 +173,15 @@ export function previewManualObservationImport(format: ManualImportFormat, conte
       errors.push({ row: index + 2, field: "value", message: "评分型指标必须位于 0–100" });
       return;
     }
+    // 手工值永远优先于自动值：价格、估值倍数写成 0 或负数会长期污染动量、乖离和估值分位
+    if ("positive" in definition && definition.positive && numericValue <= 0) {
+      errors.push({ row: index + 2, field: "value", message: `${definition.label}必须大于 0` });
+      return;
+    }
+    if ("nonNegative" in definition && definition.nonNegative && numericValue < 0) {
+      errors.push({ row: index + 2, field: "value", message: `${definition.label}不能为负数` });
+      return;
+    }
     if (parsed.data.availableAt.slice(0, 10) < parsed.data.asOf) {
       errors.push({ row: index + 2, field: "availableAt", message: "可用时间不能早于数据日期" });
       return;

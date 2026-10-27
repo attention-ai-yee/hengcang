@@ -7,6 +7,8 @@ export interface HistoricalObservation {
   asOf: string;
   availableAt: string;
   quality?: "VALID" | "PARTIAL";
+  /** 财报类桶级汇总按权重占主导的报告期；旧数据或非财报指标没有 */
+  reportPeriod?: string;
 }
 
 export interface MetricSeries {

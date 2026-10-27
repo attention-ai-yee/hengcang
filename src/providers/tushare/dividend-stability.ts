@@ -6,7 +6,9 @@ export function scoreDividendStability(records: TushareDividendRecord[], evaluat
   for (const record of records) {
     const paidDate = record.payDate ?? record.exDate;
     const year = Number((paidDate ?? record.reportPeriod).slice(0, 4));
-    // Only implementation/completion records with a positive cash amount count.
+    // 只算已实施、有现金金额的记录：预案、股东大会通过、未通过的方案都不算（v2 起分红稳定性 < 60 会直接触发体检）。
+    // div_proc 缺失的旧数据退回看派息日 / 除息日。
+    if (record.procedure !== null && record.procedure.trim() !== "" && record.procedure.trim() !== "实施") continue;
     if (!Number.isFinite(year) || year >= currentYear || !paidDate || (record.cashDividend ?? 0) <= 0) continue;
     paidByYear.set(year, (paidByYear.get(year) ?? 0) + (record.cashDividend ?? 0));
   }

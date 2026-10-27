@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { sendJson } from "@/lib/client-fetch";
 import { shanghaiDate } from "@/lib/shanghai";
 
 const SCORE_FIELDS = [
@@ -15,19 +16,15 @@ export function ManualScoreForm() {
 
   async function submit(formData: FormData) {
     setStatus("计算中…");
-    const response = await fetch("/api/scores/manual", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        assetBucket: formData.get("assetBucket"),
-        cheapnessScore: Number(formData.get("cheapnessScore")),
-        fundamentalHealth: formData.get("fundamentalHealth"),
-        trendScore: Number(formData.get("trendScore")),
-        asOf: shanghaiDate(), // M14: 上海时区今天
-      }),
-    });
-    setStatus(response.ok ? "已生成低可信度评分快照" : "计算失败，请检查 0–100 的输入范围与基本面体检选项");
-    if (response.ok) router.refresh();
+    const result = await sendJson("/api/scores/manual", "POST", {
+      assetBucket: formData.get("assetBucket"),
+      cheapnessScore: Number(formData.get("cheapnessScore")),
+      fundamentalHealth: formData.get("fundamentalHealth"),
+      trendScore: Number(formData.get("trendScore")),
+      asOf: shanghaiDate(), // M14: 上海时区今天
+    }, "计算失败，请检查 0–100 的输入范围与基本面体检选项");
+    setStatus(result.ok ? "已生成低可信度评分快照" : result.message);
+    if (result.ok) router.refresh();
   }
 
   return (

@@ -14,7 +14,25 @@ import { runRefresh } from "./refresh";
  * worker 的存活句柄。信号处理仍负责清理它并正常退出。
  */
 export const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/**
+ * 按到期判断而不是固定 6 小时一跳（复查发现）：定时器在笔记本休眠时不走、重启后又从头数，
+ * 原来的写法可能很久都刷不到一次。现在每 30 分钟醒一次，按墙钟时间看上次成功刷新是否已满 6 小时。
+ */
+export const CHECK_INTERVAL_MS = 30 * 60 * 1000;
+/** 上次尝试失败（或没配置 Token）后至少隔 1 小时再试，免得每半小时打一次接口 */
+export const RETRY_AFTER_FAILURE_MS = 60 * 60 * 1000;
+/** 启动后几秒就检查一次：开机或重启 worker 时数据已经过期的，马上补 */
+export const STARTUP_DELAY_MS = 5_000;
 let inFlight = false;
+
+/** 行情和评分是否到期：上次成功距今满 6 小时，且上次尝试距今满 1 小时。 */
+export function refreshDue(status: { lastSuccessAt: string | null; lastAttemptAt: string | null } | null | undefined, now: Date): boolean {
+  const elapsed = (value: string | null | undefined) => {
+    const time = value ? Date.parse(value) : Number.NaN;
+    return Number.isFinite(time) ? now.getTime() - time : Number.POSITIVE_INFINITY;
+  };
+  return elapsed(status?.lastSuccessAt) >= REFRESH_INTERVAL_MS && elapsed(status?.lastAttemptAt) >= RETRY_AFTER_FAILURE_MS;
+}
 let timer: NodeJS.Timeout | undefined;
 
 async function tick(): Promise<void> {
@@ -25,13 +43,16 @@ async function tick(): Promise<void> {
   inFlight = true;
   try {
     try {
-      const report = await runRefresh();
-      console.log(new Date().toISOString(), JSON.stringify({
-        provider: report.provider,
-        status: report.status,
-        inserted: report.inserted,
-        updated: report.updated,
-      }));
+      const { readProviderStatus } = await import("../src/server/automatic-data-refresh-service");
+      if (refreshDue(readProviderStatus("tushare"), new Date())) {
+        const report = await runRefresh();
+        console.log(new Date().toISOString(), JSON.stringify({
+          provider: report.provider,
+          status: report.status,
+          inserted: report.inserted,
+          updated: report.updated,
+        }));
+      }
     } catch (error) {
       console.error("Scheduled refresh failed", error);
     }
@@ -66,21 +87,21 @@ export function scheduleNextTick(handler: () => void | Promise<void>, intervalMs
   }, intervalMs);
 }
 
-function schedule(): void {
+function schedule(delayMs = CHECK_INTERVAL_MS): void {
   timer = scheduleNextTick(() => {
-    void tick().finally(schedule);
-  }, REFRESH_INTERVAL_MS);
+    void tick().finally(() => schedule());
+  }, delayMs);
 }
 
 function startWorker(): void {
-  schedule();
+  schedule(STARTUP_DELAY_MS);
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       clearTimeout(timer);
       process.exit(0);
     });
   }
-  console.log("Local refresh worker started; interval: 6 hours (data refresh + daily news scan).");
+  console.log("Local refresh worker started: checks every 30 minutes; refreshes data once the last success is 6+ hours old, scans news about daily.");
 }
 
 // 仅在直接执行（`pnpm worker`）时启动：被测试或其它模块导入时不得注册常驻

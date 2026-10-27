@@ -12,8 +12,10 @@ import { shanghaiDate } from "@/lib/shanghai";
  * 1. 带正文复核时模型给出 triggered=true 且高置信；
  * 2. 模型摘录的证据能在原文里逐字找到（防止编造）；
  * 3. 条件属于这份逻辑且尚未触发（条件用 B1、B2 这样的编号交给模型，答出列表外的编号一律作废）；
- * 4. 事件发生在最近 30 天内；
+ * 4. 文章有发布日期且在最近 30 天内（日期不明的一律不自动触发；模型给的事件日期也必须在 30 天内）；
  * 5. 来源权威度不低于 2（搜索接口给出的 -1–4 分，-1 为未知）。
+ * 另外：你对某条条件写过复核或撤销过误判后，不晚于那一天发生的事件不再触发它（同一条新闻换个网站转载不会反复触发），
+ * 之后的新事件也必须有明确的事件日期才自动触发。
  * 自动触发只会「暂停新增」，不会卖出；误判可以一键撤销。
  */
 export const NEWS_MAX_AGE_DAYS = 30;
@@ -303,10 +305,12 @@ const screeningItemSchema = z.object({
  * 每个候选都得到一个结果（模型漏答或答得不成形的按 IRRELEVANT，坏一条不影响其它条）；
  * 编号不在列表里的 POSSIBLE 降为 RELATED。labels：B1 → 真实 id（只含尚未触发的条件）。
  */
-export function parseScreening(raw: unknown, candidateCount: number, labels: Map<string, string>): ScreeningItem[] {
+export function parseScreening(raw: unknown, candidateCount: number, labels: Map<string, string>): ScreeningItem[] | null {
   const parsed = z.object({ items: z.array(z.unknown()) }).safeParse(raw);
+  // 整体格式不对（比如没有 items）：返回 null 让这一轮失败重试，而不是把全部文章当「无关」标成看过
+  if (!parsed.success) return null;
   const answers = new Map<number, z.infer<typeof screeningItemSchema>>();
-  for (const rawItem of parsed.success ? parsed.data.items : []) {
+  for (const rawItem of parsed.data.items) {
     const item = screeningItemSchema.safeParse(rawItem);
     if (!item.success) continue;
     const { index } = item.data;
@@ -392,22 +396,35 @@ export function parseVerification(raw: unknown): Verification {
   };
 }
 
-/** 按文件头的五条规则决定：自动触发 / 可能触发（等你确认）/ 只是相关。 */
+/** 已复核 / 撤销过的条件：发布日期不晚于那一天的文章不再算「可能触发」（多半是你已经处理过的旧事） */
+export function clearedBefore(publishedOn: string | null, clearedOn: string | null | undefined): boolean {
+  return Boolean(clearedOn && publishedOn && publishedOn <= clearedOn);
+}
+
+/** 按文件头的规则决定：自动触发 / 可能触发（等你确认）/ 只是相关。 */
 export function decideTrigger(input: {
   verification: Verification;
   content: string;
   publishedOn: string | null;
   authority: number;
   breakerActive: boolean;
+  /** 你最近一次对这条条件写复核或撤销误判的日期（上海时区） */
+  clearedOn?: string | null;
   today: string;
 }): { verdict: "TRIGGER" | "POSSIBLE" | "RELATED"; reasons: string[] } {
   const { verification } = input;
   if (!verification.triggered) return { verdict: "RELATED", reasons: ["复核认为没有说明条件已经发生"] };
   if (!input.breakerActive) return { verdict: "RELATED", reasons: ["该条件已经处于触发状态"] };
+  const eventDay = verification.occurredOn ?? input.publishedOn;
+  if (input.clearedOn && eventDay && eventDay <= input.clearedOn) {
+    return { verdict: "RELATED", reasons: ["事件不晚于你上次对这条条件的复核或撤销"] };
+  }
   const reasons: string[] = [];
   if (verification.confidence !== "HIGH") reasons.push("模型不是高置信");
   if (!evidenceFound(input.content, verification.evidence)) reasons.push("证据在原文中找不到");
-  if (!withinWindow(verification.occurredOn ?? input.publishedOn, input.today)) reasons.push(`事件日期不明或超过 ${NEWS_MAX_AGE_DAYS} 天`);
+  if (!withinWindow(input.publishedOn, input.today)) reasons.push(`发布日期不明或超过 ${NEWS_MAX_AGE_DAYS} 天`);
+  else if (verification.occurredOn && !withinWindow(verification.occurredOn, input.today)) reasons.push(`事件日期超过 ${NEWS_MAX_AGE_DAYS} 天`);
+  if (input.clearedOn && !verification.occurredOn) reasons.push("这条条件复核过，事件日期不明的不自动触发");
   if (input.authority < NEWS_MIN_AUTHORITY_FOR_AUTO) reasons.push("来源权威度不足");
   return reasons.length === 0 ? { verdict: "TRIGGER", reasons } : { verdict: "POSSIBLE", reasons };
 }

@@ -28,6 +28,8 @@ export interface EquityFundamentalSnapshot {
 export interface AggregateMetricResult {
   metricKey: CanonicalMetricKey;
   value: number | null;
+  /** 财报类汇总：按权重占主导的报告期（YYYY-MM-DD）。体检据此找「上一期」，见 health-check.ts */
+  reportPeriod?: string;
   constituentCoverage: number;
   constituentCount: number;
   validConstituentCount: number;
@@ -120,8 +122,13 @@ export function aggregateFundamentalMetric(
   const usable = validWeights.flatMap((weight) => {
     const snapshot = latestBySymbol.get(weight.constituentSymbol);
     const value = snapshot?.[field];
-    return value !== null && value !== undefined && Number.isFinite(value) ? [{ weight: weight.weight, value }] : [];
+    return snapshot && value !== null && value !== undefined && Number.isFinite(value) ? [{ weight: weight.weight, value, reportPeriod: snapshot.reportPeriod }] : [];
   });
+  // 各成分股最新财报的报告期不一样（财报季里有人已出三季报、有人还是半年报）：取权重最大的那一期，平手取较新的
+  const weightByPeriod = new Map<string, number>();
+  for (const row of usable) weightByPeriod.set(row.reportPeriod, (weightByPeriod.get(row.reportPeriod) ?? 0) + row.weight);
+  const reportPeriod = [...weightByPeriod.entries()]
+    .sort((left, right) => right[1] - left[1] || right[0].localeCompare(left[0]))[0]?.[0];
   const validWeight = usable.reduce((sum, row) => sum + row.weight, 0);
   const coverage = totalWeight > 0 ? validWeight / totalWeight : 0;
   const quality = qualityFor(coverage);
@@ -129,6 +136,7 @@ export function aggregateFundamentalMetric(
   return {
     metricKey,
     value: quality && validWeight > 0 ? usable.reduce((sum, row, index) => sum + row.weight * clipped[index], 0) / validWeight : null,
+    ...(reportPeriod ? { reportPeriod } : {}),
     constituentCoverage: coverage,
     constituentCount: validWeights.length,
     validConstituentCount: usable.length,

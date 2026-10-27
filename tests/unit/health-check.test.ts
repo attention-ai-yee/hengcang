@@ -67,7 +67,7 @@ describe("assessFundamentalHealth", () => {
   it("对照值取「约一个季度前」：相隔不足 80 天的点不算上一期，超过 200 天视为缺失", () => {
     // 09-30 距 10-20 只有 20 天，不能当上一期；只剩 10-20 一个点 → 缺少对照值
     const tooClose = assessFundamentalHealth(tech(quarterly([["2026-09-30", -5], ["2026-10-20", -6]]), EMPTY));
-    expect(tooClose.checks[0]).toMatchObject({ status: "MISSING", note: "缺少约一个季度前的对照值" });
+    expect(tooClose.checks[0]).toMatchObject({ status: "MISSING", note: "缺少上一期（约一个季度前）的对照值" });
     // 2026-01-05 距 10-20 超过 200 天
     const tooFar = assessFundamentalHealth(tech(quarterly([["2026-01-05", -5], ["2026-10-20", -6]]), EMPTY));
     expect(tooFar.checks[0].status).toBe("MISSING");
@@ -122,5 +122,59 @@ describe("calculateAssetScore 接入体检", () => {
     expect(result.candidateState).toBe("REASSESS_THESIS");
     expect(result.allowAdd).toBe(false);
     expect(Object.keys(result.components).some((key) => key.startsWith("fundamental."))).toBe(true); // 基本面子分仍作展示参考
+  });
+});
+
+describe("上一期按报告期找（复查发现：三季报季拿三季报去比一季报）", () => {
+  function periodic(points: Array<[string, number, string]>): MetricSeries {
+    const history = points.map(([asOf, value, reportPeriod]) => ({ value, asOf, availableAt: `${asOf}T18:00:00+08:00`, quality: "VALID" as const, reportPeriod }));
+    const latest = history.at(-1);
+    return { currentValue: latest?.value ?? null, history, source: "tushare-index-aggregate", asOf: latest?.asOf ?? EVAL_DATE, availableAt: latest?.availableAt, quality: "VALID", coverage: 1 };
+  }
+  // 公告日序列：一季报主导到 8 月中旬，半年报 8 月下旬起主导，三季报 10 月下旬起主导
+  const calendar = (q1: number, h1: number, q3: number) => periodic([
+    ["2026-05-10", q1, "2026-03-31"],
+    ["2026-08-12", q1 + 1, "2026-03-31"],
+    ["2026-08-31", h1, "2026-06-30"],
+    ["2026-10-10", h1, "2026-06-30"],
+    ["2026-10-24", q3, "2026-09-30"],
+  ]);
+
+  it("三季报与半年报都为负 → 恶化（按日期间隔会拿到 8/12 的一季报而误判正常）", () => {
+    const health = assessFundamentalHealth(tech(calendar(5, -8, -10), quarterly([["2026-07-15", 2], ["2026-10-20", 3]])));
+    expect(health.status).toBe("DETERIORATING");
+    expect(health.checks.find((item) => item.key === "earningsGrowth")?.previous).toEqual({ value: -8, asOf: "2026-10-10" });
+  });
+
+  it("半年报为正、三季报为负 → 只有一期为负，不算恶化（按日期间隔会拿到一季报而误判恶化）", () => {
+    const health = assessFundamentalHealth(tech(calendar(-5, 3, -2), quarterly([["2026-07-15", 2], ["2026-10-20", 3]])));
+    expect(health.checks.find((item) => item.key === "earningsGrowth")?.status).toBe("OK");
+  });
+
+  it("相邻报告期隔得太远（中间缺了一期以上）→ 缺数据，不硬比", () => {
+    const series = periodic([["2026-03-20", -5, "2025-09-30"], ["2026-10-24", -10, "2026-09-30"]]);
+    const check = assessFundamentalHealth(tech(series, quarterly([["2026-07-15", 2], ["2026-10-20", 3]]))).checks.find((item) => item.key === "earningsGrowth");
+    expect(check?.status).toBe("MISSING");
+  });
+
+  it("旧数据没有报告期时退回按日期间隔（约一个季度前）", () => {
+    const health = assessFundamentalHealth(tech(quarterly([["2026-07-15", -8], ["2026-10-20", -12]]), quarterly([["2026-07-15", 2], ["2026-10-20", 3]])));
+    expect(health.status).toBe("DETERIORATING");
+  });
+});
+
+describe("手工基本面判断只在新鲜时替代自动体检（复查发现）", () => {
+  const negativeTwice = quarterly([["2026-07-20", -6], ["2026-10-20", -9]]);
+
+  it("过期（> 180 天）的手工判断不再盖住自动规则发现的恶化", () => {
+    const stale = { score: 70, source: "manual", asOf: "2025-12-01", quality: "VALID" as const };
+    expect(assessFundamentalHealth(value({ earningsGrowth: negativeTwice, fundamentalOverride: stale })).status).toBe("DETERIORATING");
+  });
+
+  it("新鲜的手工判断照旧替代自动体检", () => {
+    const fresh = { score: 70, source: "manual", asOf: "2026-10-01", quality: "VALID" as const };
+    const health = assessFundamentalHealth(value({ earningsGrowth: negativeTwice, fundamentalOverride: fresh }));
+    expect(health.status).toBe("HEALTHY");
+    expect(health.checks.map((check) => check.key)).toEqual(["fundamentalOverride"]);
   });
 });

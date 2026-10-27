@@ -1,3 +1,5 @@
+import { shanghaiDate } from "@/lib/shanghai";
+
 /**
  * 持仓级投资逻辑与失效条件（v2，docs/hengcang_v2_allocation_fundamentals_thesis.md §4）。
  *
@@ -39,10 +41,11 @@ export function needsThesis(holding: { isSingleStock: boolean; isThematicEtf: bo
 
 /**
  * 定期复核：自上次复核（没有复核则自写下逻辑起）超过 90 天 → 到期。
- * 时间只看日期部分，today 用上海时区的 YYYY-MM-DD。
+ * 时间只看日期部分，统一用上海时区：today、lastReviewOn 是上海日期，thesisCreatedAt 是 UTC 时间戳，
+ * 先换成上海日期（否则上海 0–8 点写下的逻辑会早一天到期）。
  */
 export function reviewDue(input: { lastReviewOn: string | null; thesisCreatedAt: string; today: string; intervalDays?: number }): boolean {
-  const since = input.lastReviewOn ?? input.thesisCreatedAt;
+  const since = input.lastReviewOn ?? shanghaiDate(new Date(input.thesisCreatedAt));
   return dayNumber(input.today) - dayNumber(since) >= (input.intervalDays ?? THESIS_REVIEW_INTERVAL_DAYS);
 }
 

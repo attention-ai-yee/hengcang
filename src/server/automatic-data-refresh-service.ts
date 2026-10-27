@@ -47,6 +47,7 @@ function pushWarningOnce(warnings: string[], message: string): void {
 
 function yearsBefore(day: string, years: number): string { const date = new Date(`${day}T00:00:00Z`); date.setUTCFullYear(date.getUTCFullYear() - years); return date.toISOString().slice(0, 10); }
 function monthsBefore(day: string, months: number): string { const date = new Date(`${day}T00:00:00Z`); date.setUTCMonth(date.getUTCMonth() - months); return date.toISOString().slice(0, 10); }
+function daysBefore(day: string, days: number): string { const date = new Date(`${day.slice(0, 10)}T00:00:00Z`); date.setUTCDate(date.getUTCDate() - days); return date.toISOString().slice(0, 10); }
 function providerMessage(result: ProviderResult<unknown>, label: string): string | null { return result.ok ? (result.data instanceof Array && result.data.length === 0 ? `${label}没有返回数据` : null) : `${label}：${result.error.code} ${result.error.message}`; }
 
 function priceRows(bucket: ScorableAssetBucket, result: Extract<ProviderResult<PricePoint[]>, { ok: true }>): ProviderMetricObservationInput[] {
@@ -59,7 +60,7 @@ function metricRows(bucket: ScorableAssetBucket, result: Extract<ProviderResult<
   });
 }
 function aggregateRows(bucket: ScorableAssetBucket, results: AggregateMetricResult[], asOf: string, fetchedAt: string): ProviderMetricObservationInput[] {
-  return results.flatMap((result): ProviderMetricObservationInput[] => result.value === null ? [] : [{ subjectType: "ASSET_BUCKET", subjectId: bucket, metricKey: result.metricKey, value: result.value.toFixed(8), unit: result.metricKey === "DIVIDEND_YIELD" || result.metricKey === "ROE" || result.metricKey.includes("GROWTH") ? "percent" : "ratio", provider: AGGREGATE_PROVIDER, observedAt: `${result.effectiveDate || asOf}T15:00:00+08:00`, availableAt: `${asOf}T18:00:00+08:00`, asOf, fetchedAt, quality: result.quality, metadataJson: JSON.stringify({ constituentCoverage: result.constituentCoverage, constituentCount: result.constituentCount, validConstituentCount: result.validConstituentCount, effectiveDate: result.effectiveDate }) }]);
+  return results.flatMap((result): ProviderMetricObservationInput[] => result.value === null ? [] : [{ subjectType: "ASSET_BUCKET", subjectId: bucket, metricKey: result.metricKey, value: result.value.toFixed(8), unit: result.metricKey === "DIVIDEND_YIELD" || result.metricKey === "ROE" || result.metricKey.includes("GROWTH") ? "percent" : "ratio", provider: AGGREGATE_PROVIDER, observedAt: `${result.effectiveDate || asOf}T15:00:00+08:00`, availableAt: `${asOf}T18:00:00+08:00`, asOf, fetchedAt, quality: result.quality, metadataJson: JSON.stringify({ constituentCoverage: result.constituentCoverage, constituentCount: result.constituentCount, validConstituentCount: result.validConstituentCount, effectiveDate: result.effectiveDate, ...(result.reportPeriod ? { reportPeriod: result.reportPeriod } : {}) }) }]);
 }
 /** 读取某桶指定指标的全量入库历史（跨运行），供派生序列做点内配对（Code Review H7）。 */
 function bucketMetricHistory(bucket: string, metricKeys: string[]): ProviderMetricObservationInput[] {
@@ -147,12 +148,19 @@ export function fundamentalsRefreshMode(input: { fullBackfill: boolean; lastSucc
   return Number.isFinite(elapsedMs) && elapsedMs < FUNDAMENTALS_REFRESH_INTERVAL_DAYS * 24 * 60 * 60 * 1000 ? "SKIP" : "INCREMENTAL";
 }
 
+/** 增量模式回头重算的天数：公告日早于上次汇总、但晚几天才进 Tushare 的财报也要并进去 */
+export const FUNDAMENTALS_RECOMPUTE_DAYS = 30;
+
 /**
- * 增量模式只为「上次汇总之后」的新日期生成桶级汇总：窗口只有 15 个月，若重算窗口前部的历史日期，
- * 部分成分股的当时最新财报会落在窗口之外，低覆盖率的结果会 upsert 覆盖全量回填时算好的历史行。
+ * 增量模式只为「上次汇总前 30 天之后」的日期生成桶级汇总：
+ * - 不回算更早的历史：窗口只有 15 个月，重算窗口前部的历史日期时，部分成分股的当时最新财报会落在
+ *   窗口之外，低覆盖率的结果会 upsert 覆盖全量回填时算好的历史行；
+ * - 但最近 30 天要重算：公告日在上次汇总之前、晚几天才进入 Tushare 的财报（财报季很常见），
+ *   只算新日期就永远并不进来。
  */
 export function selectAggregationDates(snapshotDates: string[], lastAggregateAsOf: string | null): string[] {
-  return [...new Set(snapshotDates)].filter((date) => lastAggregateAsOf === null || date > lastAggregateAsOf).sort();
+  const from = lastAggregateAsOf === null ? null : daysBefore(lastAggregateAsOf, FUNDAMENTALS_RECOMPUTE_DAYS);
+  return [...new Set(snapshotDates)].filter((date) => from === null || date > from).sort();
 }
 
 function lastAggregateAsOf(bucket: ScorableAssetBucket): string | null {
@@ -294,10 +302,15 @@ function needsInitialHistory() { return !getDatabase().select({ id: metricObserv
  * 清理早期 ERP 派生行：当时 quality 误标 VALID 且 availableAt 未按输入取晚（无前视复查修复）。
  * 这些行已被按日重新推导的 PARTIAL 行完全取代，保留会造成同日双行。
  */
-function removeLegacyValidEquityRiskPremium() {
+export function removeLegacyValidEquityRiskPremium() {
+  // 只删自动派生的旧行：手工导入一律以 VALID 入库，旧条件会在每次刷新时把它们静默删掉
   getDatabase()
     .delete(metricObservations)
-    .where(and(eq(metricObservations.metricKey, "EQUITY_RISK_PREMIUM"), eq(metricObservations.quality, "VALID")))
+    .where(and(
+      eq(metricObservations.metricKey, "EQUITY_RISK_PREMIUM"),
+      eq(metricObservations.quality, "VALID"),
+      eq(metricObservations.isManualOverride, false),
+    ))
     .run();
 }
 function removeInvalidLegacyRealYield() {
@@ -424,6 +437,11 @@ async function refreshDividendStability(provider: TushareProvider, valueProxy: T
   }
   return output;
 }
+/** 读取某个数据源的状态行（worker 按「上次成功刷新距今多久」决定要不要刷新） */
+export function readProviderStatus(provider: string) {
+  return getDatabase().select().from(dataSourceStatus).where(eq(dataSourceStatus.provider, provider)).get() ?? null;
+}
+
 function saveProviderStatus(provider: string, status: AutomaticRefreshReport["status"], now: string, errors: string[], capabilities: Record<string, string>) {
   const db = getDatabase(); const previous = db.select().from(dataSourceStatus).where(eq(dataSourceStatus.provider, provider)).get();
   const values = { enabled: status !== "NOT_CONFIGURED", status, lastAttemptAt: now, lastSuccessAt: status === "READY" || status === "DEGRADED" ? now : previous?.lastSuccessAt ?? null, lastErrorCode: errors.length ? (errors.some((item) => item.includes("PERMISSION_DENIED")) ? "PERMISSION_DENIED" : "PARTIAL_FAILURE") : null, lastErrorMessage: errors.length ? errors.slice(0, 8).join("；") : null, capabilitiesJson: JSON.stringify(capabilities), updatedAt: now };
@@ -463,22 +481,21 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
   const fundamentalWarnings: string[] = [];
   const fundamentalRows = await refreshFundamentals(provider, proxies, end, fundamentalsRange, fundamentalsMode, fundamentalWarnings, fetchedAt); const allRows = [...fundamentalRows.filter((row) => row.subjectType === "INSTRUMENT")];
   warnings.push(...fundamentalWarnings);
-  if (fundamentalsMode !== "SKIP") {
-    saveProviderStatus(FUNDAMENTALS_STATUS_PROVIDER, fundamentalRows.length > 0 ? (fundamentalWarnings.length ? "DEGRADED" : "READY") : "ERROR", fetchedAt, fundamentalWarnings, { fina_indicator: fundamentalsMode, dividend: fundamentalsMode, window: `${fundamentalsRange.start}..${fundamentalsRange.end}` });
-  }
   for (const row of fundamentalRows.filter((row) => row.subjectType === "ASSET_BUCKET")) byBucket.set(row.subjectId as ScorableAssetBucket, [...(byBucket.get(row.subjectId as ScorableAssetBucket) ?? []), row]);
   // 分红历史一年才变一次，跟财报同一节奏（v1 每 6 小时重拉全部成分股）。
   if (fundamentalsMode !== "SKIP") byBucket.set("VALUE_DIVIDEND", [...(byBucket.get("VALUE_DIVIDEND") ?? []), ...await refreshDividendStability(provider, proxies.find((item) => item.bucket === "VALUE_DIVIDEND"), end, fullBackfill, warnings, fetchedAt)]);
   for (const bucket of ["VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"] as const) {
     // 派生盈利增长写入单独的 *_DERIVED 参考指标（每次都算），不再充当财报口径的兜底。
     const rows = byBucket.get(bucket) ?? [];
-    const derived = derivedEarningsGrowth(bucket, rows, fetchedAt, end);
-    // 派生兜底失效不再静默：增量模式下缺 PE 历史会让财务基本面永久陈旧。
-    if (derived.length === 0) pushWarningOnce(warnings, `${bucket} 派生盈利增长无可用 PE 历史`);
-    allRows.push(...derived);
+    // v2 起派生值只作参考展示，算不出来不影响评分，也不再把 Tushare 状态标成 DEGRADED
+    allRows.push(...derivedEarningsGrowth(bucket, rows, fetchedAt, end));
   }
   allRows.push(...deriveEquityRiskPremium("BROAD_EQUITY", byBucket.get("BROAD_EQUITY") ?? [], end, fetchedAt));
   allRows.push(...Array.from(byBucket.values()).flat()); const commit = commitProviderMetricObservations(allRows); const reports: BucketRefreshReport[] = [];
+  // 财报状态在数据入库之后才记：之前记的话，入库前崩溃或被中断会让下一次财报刷新白白跳过 7 天
+  if (fundamentalsMode !== "SKIP") {
+    saveProviderStatus(FUNDAMENTALS_STATUS_PROVIDER, fundamentalRows.length > 0 ? (fundamentalWarnings.length ? "DEGRADED" : "READY") : "ERROR", fetchedAt, fundamentalWarnings, { fina_indicator: fundamentalsMode, dividend: fundamentalsMode, window: `${fundamentalsRange.start}..${fundamentalsRange.end}` });
+  }
   for (const proxy of proxies) {
     const rows = allRows.filter((row) => row.subjectType === "ASSET_BUCKET" && row.subjectId === proxy.bucket);
     const latestAsOf = rows.reduce<string | null>((latest, row) => !latest || row.asOf > latest ? row.asOf : latest, null);

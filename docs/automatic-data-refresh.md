@@ -31,7 +31,7 @@ pnpm data:refresh
 
 价格/PE 派生的盈利增长（v2 起写入 `EARNINGS_GROWTH_DERIVED` / `INDEX_EARNINGS_GROWTH_DERIVED`，不再和成分股财报汇总的 `EARNINGS_GROWTH` / `INDEX_EARNINGS_GROWTH` 混在一条序列）会跨运行读取数据库中的 `PRICE_CLOSE` 与 `PE_TTM` 历史，按 `available_at` 做点内配对后计算约一年同比，只作参考展示，不进基本面体检。若某桶没有任何可用 PE 历史，刷新报告会显式给出告警而不是静默跳过。详见 [v2 设计说明 §2](hengcang_v2_allocation_fundamentals_thesis.md)。
 
-`pnpm worker` 为常驻进程，每 6 小时触发一轮刷新；服务端（`app/api/data/refresh`）与页面按钮（同源 server action）共用同一条刷新链路。
+`pnpm worker` 为常驻进程，每 30 分钟检查一次：距上次成功刷新满 6 小时就刷新（按墙钟时间判断，笔记本休眠、重启都不影响；失败后隔 1 小时再试），并做每天一次的 AI 新闻扫描。服务端（`app/api/data/refresh`）与页面按钮（同源 server action）共用同一条刷新链路，页面上刷新过的 worker 不会再重复刷。
 
 同一报告期发生修订时，数据库以 `observed_at + available_at` 存储多个版本。评分和回测只选择 `available_at <= evaluationDate` 的最后一个版本，避免未来数据泄漏；回测取 `PRICE_CLOSE` 时同样按 `available_at` 过滤，并对同一 `as_of` 的多个来源按「手工覆盖 > 主 Provider > VALID > 最新 available_at/fetched_at」确定性选行，同时统计“顺延前值”的评估区间。
 

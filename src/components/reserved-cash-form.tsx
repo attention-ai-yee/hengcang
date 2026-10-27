@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { sendJson } from "@/lib/client-fetch";
 
 function minorToYuanInput(minor: string): string {
   const normalized = minor.replace(/^0+(?=\d)/, "") || "0";
@@ -26,14 +27,9 @@ export function ReservedCashForm({ initialMinor }: { initialMinor: string }) {
 
   async function submit(formData: FormData) {
     setStatus("保存中…");
-    const response = await fetch("/api/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reservedCashMinor: yuanToMinor(String(formData.get("reservedCash"))) }),
-    });
-    const body = await response.json();
-    setStatus(response.ok ? "已保存，仓位比例已按可投资资产重算" : body.error?.message ?? "保存失败");
-    if (response.ok) router.refresh();
+    const result = await sendJson("/api/settings", "PATCH", { reservedCashMinor: yuanToMinor(String(formData.get("reservedCash"))) }, "保存失败");
+    setStatus(result.ok ? "已保存，仓位比例已按可投资资产重算" : result.message);
+    if (result.ok) router.refresh();
   }
 
   return (

@@ -73,7 +73,10 @@ export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
     const series = {
       currentValue: latest ? Number(latest.value) : null,
       history: historyRows
-        .map((row) => ({ value: Number(row.value), asOf: row.asOf, availableAt: row.availableAt, quality: row.quality as "VALID" | "PARTIAL" }))
+        .map((row) => {
+          const reportPeriod = parseReportPeriod(row.metadataJson);
+          return { value: Number(row.value), asOf: row.asOf, availableAt: row.availableAt, quality: row.quality as "VALID" | "PARTIAL", ...(reportPeriod ? { reportPeriod } : {}) };
+        })
         .filter((point) => Number.isFinite(point.value)),
       source: latest?.provider ?? "UNAVAILABLE",
       asOf: latest?.asOf ?? request.asOf,
@@ -216,6 +219,16 @@ export function commitProviderMetricObservations(rows: ProviderMetricObservation
   });
 
   return { inserted, updated, committed: rows.length };
+}
+
+function parseReportPeriod(metadataJson: string | null): string | undefined {
+  if (!metadataJson) return undefined;
+  try {
+    const value = (JSON.parse(metadataJson) as { reportPeriod?: unknown }).reportPeriod;
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseCoverage(metadataJson: string | null): number | undefined {

@@ -53,9 +53,11 @@ export class TushareRateLimiter {
   }
 }
 
-function clampInt(raw: string | number | undefined, fallback: number, min: number, max: number): number {
+/** 留空、非数字、≤ 0 都按默认值（.env.local 里留一行 TUSHARE_MAX_RPM= 不能变成每分钟 1 次）；其余钳位。 */
+export function clampInt(raw: string | number | undefined, fallback: number, min: number, max: number): number {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) return fallback;
   const value = Number(raw);
-  if (!Number.isFinite(value)) return fallback;
+  if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 

@@ -134,14 +134,27 @@ describe("decideTrigger", () => {
   it("任何一条不满足 → 可能触发，等你确认，并写明原因", () => {
     expect(decideTrigger({ ...base, verification: { ...verification, confidence: "MEDIUM" } })).toEqual({ verdict: "POSSIBLE", reasons: ["模型不是高置信"] });
     expect(decideTrigger({ ...base, verification: { ...verification, evidence: "宁德时代取消全部订单" } }).reasons).toEqual(["证据在原文中找不到"]);
-    expect(decideTrigger({ ...base, verification: { ...verification, occurredOn: "2026-08-01" } }).reasons).toEqual(["事件日期不明或超过 30 天"]);
+    expect(decideTrigger({ ...base, verification: { ...verification, occurredOn: "2026-08-01" } }).reasons).toEqual(["事件日期超过 30 天"]);
     expect(decideTrigger({ ...base, verification: { ...verification, occurredOn: null }, publishedOn: null }).verdict).toBe("POSSIBLE");
+    expect(decideTrigger({ ...base, publishedOn: "2026-08-01" }).reasons).toEqual(["发布日期不明或超过 30 天"]);
     expect(decideTrigger({ ...base, authority: 1 }).reasons).toEqual(["来源权威度不足"]);
     expect(decideTrigger({ ...base, authority: -1 }).verdict).toBe("POSSIBLE");
   });
 
   it("模型没给事件日期时用发布日期", () => {
     expect(decideTrigger({ ...base, verification: { ...verification, occurredOn: null } }).verdict).toBe("TRIGGER");
+  });
+
+  it("文章没有发布日期：模型从正文里推出一个 30 天内的日期也不自动触发（复查发现）", () => {
+    expect(decideTrigger({ ...base, publishedOn: null })).toEqual({ verdict: "POSSIBLE", reasons: ["发布日期不明或超过 30 天"] });
+  });
+
+  it("复核或撤销过的条件：不晚于那一天的事件只算相关；之后的新事件要有明确日期才自动触发（复查发现）", () => {
+    expect(decideTrigger({ ...base, clearedOn: "2026-10-15" })).toEqual({ verdict: "RELATED", reasons: ["事件不晚于你上次对这条条件的复核或撤销"] });
+    expect(decideTrigger({ ...base, clearedOn: "2026-10-16" }).verdict).toBe("RELATED");
+    expect(decideTrigger({ ...base, clearedOn: "2026-10-10" }).verdict).toBe("TRIGGER");
+    expect(decideTrigger({ ...base, clearedOn: "2026-10-10", verification: { ...verification, occurredOn: null } }))
+      .toEqual({ verdict: "POSSIBLE", reasons: ["这条条件复核过，事件日期不明的不自动触发"] });
   });
 });
 
@@ -166,10 +179,14 @@ describe("parseScreening", () => {
     ]);
   });
 
-  it("坏一条不影响其它条；数字编号按 B 编号处理；整体格式不对就全按无关", () => {
-    expect(parseScreening({ items: [{ index: "x" }, { index: 1, verdict: "POSSIBLE", breakerId: 1 }] }, 2, labels).map((item) => [item.verdict, item.breakerId]))
+  it("坏一条不影响其它条；数字编号按 B 编号处理", () => {
+    expect(parseScreening({ items: [{ index: "x" }, { index: 1, verdict: "POSSIBLE", breakerId: 1 }] }, 2, labels)?.map((item) => [item.verdict, item.breakerId]))
       .toEqual([["IRRELEVANT", null], ["POSSIBLE", "breaker-capex"]]);
-    expect(parseScreening("不是 JSON 对象", 2, labels).map((item) => item.verdict)).toEqual(["IRRELEVANT", "IRRELEVANT"]);
+  });
+
+  it("整体格式不对（没有 items）返回 null，让这一轮失败重试，而不是把文章全标成看过（复查发现）", () => {
+    expect(parseScreening("不是 JSON 对象", 2, labels)).toBeNull();
+    expect(parseScreening({ results: [{ index: 0, verdict: "POSSIBLE", breakerId: "B1" }] }, 1, labels)).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { DEFAULT_SCORING_CONFIG, type ScoringConfig } from "./config";
-import type { AssetModelInput, DirectScoreMetric, MetricSeries } from "./types";
+import type { AssetModelInput, DirectScoreMetric, HistoricalObservation, MetricSeries } from "./types";
 
 /**
  * 基本面体检 v2（docs/hengcang_v2_allocation_fundamentals_thesis.md §3）。
@@ -25,7 +25,7 @@ export interface HealthCheckResult {
   status: HealthCheckStatus;
   latest: HealthCheckPoint | null;
   previous: HealthCheckPoint | null;
-  /** MISSING 的原因（无数据 / 超过新鲜度上限 / 缺少约一个季度前的对照值） */
+  /** MISSING 的原因（无数据 / 超过新鲜度上限 / 缺少上一期的对照值） */
   note?: string;
 }
 
@@ -45,14 +45,36 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+/** 相邻两个报告期最多相隔约两个季度（一季报和年报常常同一天发，可能直接从三季报跳到一季报） */
+const MAX_REPORT_PERIOD_GAP_DAYS = 200;
+
+/**
+ * 找「上一期」：
+ * - 汇总点带报告期时按报告期找：最新一点之前、主导报告期更早的最近一点。按公告日算间隔会出错——
+ *   半年报截止 8/31、三季报截止 10/31 只隔 61 天，固定的 80 天间隔会拿三季报去比一季报。
+ * - 旧数据没有报告期（全量回填一次后就都有了）：退回按日期间隔取约一个季度前的点。
+ */
+function findPreviousReport(history: HistoricalObservation[], latest: HistoricalObservation, config: ScoringConfig): HistoricalObservation | undefined {
+  const period = latest.reportPeriod;
+  if (period) {
+    const earlier = [...history].reverse().find((point) => point.reportPeriod !== undefined && point.reportPeriod < period);
+    if (earlier?.reportPeriod) return dayNumber(period) - dayNumber(earlier.reportPeriod) <= MAX_REPORT_PERIOD_GAP_DAYS ? earlier : undefined;
+  }
+  const latestDay = dayNumber(latest.asOf);
+  return [...history].reverse().find((point) => {
+    const gap = latestDay - dayNumber(point.asOf);
+    return gap >= config.healthCheck.previousReportMinDays && gap <= config.healthCheck.previousReportMaxDays;
+  });
+}
+
 function isStale(asOf: string, visibleAt: string | undefined, evaluationDate: string, config: ScoringConfig): boolean {
   const visible = visibleAt && visibleAt.slice(0, 10) > asOf.slice(0, 10) ? visibleAt : asOf;
   return dayNumber(evaluationDate) - dayNumber(visible) > config.history.maxObservationAgeDays;
 }
 
 /**
- * 「最近两期都为负」：最新值与约一个季度前（相隔 previousReportMinDays–MaxDays 天）的值都 < 0。
- * 桶级汇总序列随成分股陆续披露而更新，按日期间隔取「上一期」比按点数取更稳。
+ * 「最近两期都为负」：最新值与上一期（见 findPreviousReport）的值都 < 0。
+ * 桶级汇总序列随成分股陆续披露而更新，按报告期（或日期间隔）取「上一期」比按点数取更稳。
  */
 function consecutiveNegative(
   key: string,
@@ -70,12 +92,8 @@ function consecutiveNegative(
   if (isStale(latestPoint.asOf, latestPoint.availableAt, evaluationDate, config)) {
     return { ...base, latest, status: "MISSING", note: `最新数据超过 ${config.history.maxObservationAgeDays} 天未更新` };
   }
-  const latestDay = dayNumber(latestPoint.asOf);
-  const previousPoint = [...history].reverse().find((point) => {
-    const gap = latestDay - dayNumber(point.asOf);
-    return gap >= config.healthCheck.previousReportMinDays && gap <= config.healthCheck.previousReportMaxDays;
-  });
-  if (!previousPoint) return { ...base, latest, status: "MISSING", note: "缺少约一个季度前的对照值" };
+  const previousPoint = findPreviousReport(history, latestPoint, config);
+  if (!previousPoint) return { ...base, latest, status: "MISSING", note: "缺少上一期（约一个季度前）的对照值" };
   const previous = { value: round2(previousPoint.value), asOf: previousPoint.asOf };
   return { ...base, latest, previous, status: latest.value < 0 && previous.value < 0 ? "BREACH" : "OK" };
 }
@@ -103,8 +121,9 @@ function scoreFloor(
 function checksFor(input: AssetModelInput, config: ScoringConfig): HealthCheckResult[] | null {
   switch (input.bucket) {
     case "VALUE_DIVIDEND":
-      // 基金（如 004814）拿不到成分财报时，手工基本面覆盖分优先（v1 规格 §4.2 的兜底，口径改成体检）
-      if (input.fundamentalOverride) {
+      // 基金（如 004814）拿不到成分财报时，手工基本面覆盖分优先（v1 规格 §4.2 的兜底，口径改成体检）。
+      // 只在它还新鲜时替代自动体检：过期的旧判断不能盖住自动规则发现的恶化。
+      if (input.fundamentalOverride && !isStale(input.fundamentalOverride.asOf, undefined, input.asOf, config)) {
         return [scoreFloor("fundamentalOverride", "手工基本面判断", input.fundamentalOverride, config.thresholds.fundamentalCircuitBreaker, input.asOf, config)];
       }
       return [

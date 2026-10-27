@@ -75,7 +75,7 @@ class FakeNewsClient implements NewsClient {
     return { title: "", content: url === FORECAST.url ? "分析师预计明年锂电设备资本开支可能同比下滑三成。" : "" };
   }
 
-  async chatJson(messages: ChatMessage[]) {
+  async chatJson(messages: ChatMessage[]): Promise<unknown> {
     const prompt = messages.map((message) => message.content).join("\n");
     this.prompts.push(prompt);
     if (prompt.includes("新闻搜索词")) {
@@ -266,6 +266,37 @@ describe("AI 新闻监控", () => {
     expect(breaker(capexId)?.status).toBe("ACTIVE");
   });
 
+  it("撤销之后，同一条新闻换个网站转载不会再次触发（复查发现）", async () => {
+    const breaches = getDatabase().select().from(signals).where(eq(signals.signalType, "THESIS_BREACH")).all().length;
+    // 转载 1：发布日期早于撤销那天 → 初筛就降为相关，不再进待确认
+    const repostBefore = { ...CATL, url: "https://other.example.com/catl-repost", date: "2026-10-18T02:00:00Z" };
+    // 转载 2：撤销后才发布，但复核出的事件日期（10-15）不晚于撤销那天 → 相关
+    const repostAfter = { ...CATL, url: "https://third.example.com/catl-copy", date: "2026-10-20T02:00:00Z" };
+    const reposts = new FakeNewsClient([repostBefore, repostAfter]);
+    const report = await scanNews({ client: reposts, now: later(48), force: true });
+    expect(report).toMatchObject({ status: "READY", triggered: 0, possible: 0 });
+    expect(itemByUrl(repostBefore.url).verdict).toBe("RELATED");
+    expect(itemByUrl(repostAfter.url).verdict).toBe("RELATED");
+    expect(breaker(customerId)?.status).toBe("ACTIVE");
+    expect(getDatabase().select().from(signals).where(eq(signals.signalType, "THESIS_BREACH")).all()).toHaveLength(breaches);
+  });
+
+  it("初筛返回格式不对：这一轮失败、不把文章标成看过，下一轮重试（复查发现）", async () => {
+    class BrokenScreening extends FakeNewsClient {
+      override async chatJson(messages: ChatMessage[]): Promise<unknown> {
+        const prompt = messages.map((message) => message.content).join("\n");
+        return prompt.includes("候选新闻") ? { results: [] } : super.chatJson(messages);
+      }
+    }
+    const fresh = hit({ title: "先导智能获海外大单", url: "https://news.example.com/new-order", content: "先导智能公告获得海外订单。", rerankScore: 2 });
+    const before = getDatabase().select().from(holdingTheses).where(eq(holdingTheses.id, thesisId)).get()?.newsScannedAt;
+    const report = await scanNews({ client: new BrokenScreening([fresh]), now: later(50), force: true });
+    expect(report.status).toBe("ERROR");
+    expect(report.warnings[0]).toContain("格式不对");
+    expect(getDatabase().select().from(newsItems).where(eq(newsItems.url, fresh.url)).all()).toHaveLength(0);
+    expect(getDatabase().select().from(holdingTheses).where(eq(holdingTheses.id, thesisId)).get()?.newsScannedAt).toBe(before);
+  });
+
   it("手工记录触发的条件不能一键撤销，只能写复核", async () => {
     await recordThesisEvent(holdingId, { kind: "NEWS", occurredOn: "2026-10-19", summary: "手工记录的消息", breakerId: capexId }, later(5));
     const manual = getDatabase().select().from(thesisEvents).where(eq(thesisEvents.summary, "手工记录的消息")).get();
@@ -280,7 +311,7 @@ describe("AI 新闻监控", () => {
       thesis: "锂电扩产周期带动设备订单；海外客户占比提升。",
       breakers: (view?.breakers ?? []).map((item) => ({ id: item.id, description: item.description })),
     }, later(6));
-    await scanNews({ client: fake, now: later(30) });
+    await scanNews({ client: fake, now: later(80), force: true });
     expect(fake.queryCalls).toBe(2);
   });
 
@@ -298,6 +329,22 @@ describe("AI 新闻监控", () => {
     expect(await draftThesis(holdingId, fake)).toEqual({ thesis: "草稿逻辑", breakers: ["条件一", "条件二", "条件三"] });
     await expect(draftThesis(holdingId, null)).rejects.toMatchObject({ code: "NOT_CONFIGURED" });
     await expect(draftThesis("no-such-holding", fake)).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("删掉或改写条件时，它名下待确认的「可能触发」一并忽略，不会挂着没法处理（复查发现）", async () => {
+    const pendingFor = (id: string) => ({
+      id: randomUUID(), thesisId, url: `https://news.example.com/pending-${id}`, title: "待确认", siteName: null, publishedOn: "2026-10-19",
+      summary: "待确认", verdict: "POSSIBLE", breakerId: id, evidence: null, authority: 3, eventId: null, status: "OPEN", foundAt: later(70).toISOString(),
+    });
+    getDatabase().insert(newsItems).values(pendingFor(customerId)).run();
+    expect((await listThesisSummaries("2026-10-22")).get(holdingId)?.pendingNews).toBe(1);
+    const view = await getThesisView(holdingId);
+    await saveThesis(holdingId, {
+      thesis: view?.thesis?.thesis ?? "",
+      breakers: (view?.breakers ?? []).filter((item) => item.id !== customerId).map((item) => ({ id: item.id, description: item.description })),
+    }, later(71));
+    expect(getDatabase().select().from(newsItems).where(eq(newsItems.url, `https://news.example.com/pending-${customerId}`)).get()?.status).toBe("DISMISSED");
+    expect((await listThesisSummaries("2026-10-22")).get(holdingId)?.pendingNews).toBe(0);
   });
 
   it("删除持仓时新闻记录一并删除", async () => {

@@ -101,7 +101,7 @@ export default async function HoldingThesisPage({ params }: { params: Promise<{ 
                 {news.length === 0 ? (
                   <li className="text-sm text-[#718078]">还没有发现相关新闻</li>
                 ) : news.map((item) => {
-                  const pendingBreaker = item.verdict === "POSSIBLE" && item.status === "OPEN" && item.breakerId ? breakerById.get(item.breakerId) : undefined;
+                  const pending = item.verdict === "POSSIBLE" && item.status === "OPEN";
                   return (
                     <li key={item.id} className="rounded-xl border border-[#e2e8e4] p-3 text-sm">
                       <div className="flex flex-wrap items-center gap-2">
@@ -110,7 +110,7 @@ export default async function HoldingThesisPage({ params }: { params: Promise<{ 
                         <span className="text-xs text-[#7a867f]">{item.siteName ?? "来源未知"}{item.publishedOn ? ` · ${item.publishedOn}` : ""}</span>
                       </div>
                       <p className="mt-1.5 text-[#4f5c55]">{item.summary}</p>
-                      {pendingBreaker && <div className="mt-2"><NewsDecisionButtons newsItemId={item.id} breakerDescription={pendingBreaker} /></div>}
+                      {pending && <div className="mt-2"><NewsDecisionButtons newsItemId={item.id} breakerDescription={item.breakerId ? breakerById.get(item.breakerId) : undefined} /></div>}
                     </li>
                   );
                 })}
@@ -124,6 +124,8 @@ export default async function HoldingThesisPage({ params }: { params: Promise<{ 
         <Card className="p-5">
           <h2 className="mb-4 font-semibold">投资逻辑与失效条件</h2>
           <ThesisEditor
+            // 条件或状态在别处变了（记录消息、AI 触发、复核）就重新载入编辑框，免得拿旧 id 保存
+            key={view.breakers.map((breaker) => `${breaker.id}:${breaker.status}`).join("|")}
             holdingId={view.holding.id}
             initialThesis={view.thesis?.thesis ?? ""}
             initialBreakers={view.breakers.map((breaker) => ({ id: breaker.id, description: breaker.description, status: breaker.status }))}

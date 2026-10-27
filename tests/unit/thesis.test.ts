@@ -30,6 +30,12 @@ describe("reviewDue", () => {
     expect(reviewDue({ lastReviewOn: null, thesisCreatedAt: "2026-07-20T02:00:00.000Z", today: "2026-10-18" })).toBe(true);
     expect(reviewDue({ lastReviewOn: "2026-10-01", thesisCreatedAt: "2026-01-01T00:00:00.000Z", today: "2026-10-18" })).toBe(false);
   });
+
+  it("写下逻辑的时间按上海日期算：上海 0–8 点写的不会早一天到期（复查发现）", () => {
+    // UTC 07-19 17:00 = 上海 07-20 01:00
+    expect(reviewDue({ lastReviewOn: null, thesisCreatedAt: "2026-07-19T17:00:00.000Z", today: "2026-10-17" })).toBe(false);
+    expect(reviewDue({ lastReviewOn: null, thesisCreatedAt: "2026-07-19T17:00:00.000Z", today: "2026-10-18" })).toBe(true);
+  });
 });
 
 describe("planBreakerChanges", () => {

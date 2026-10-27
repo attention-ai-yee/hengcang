@@ -9,6 +9,9 @@ import { listThesisSummaries, type ThesisSummary } from "@/server/thesis-service
 
 export const dynamic = "force-dynamic";
 
+/** 有评分的资产桶；海外权益、现金债券、其他不打分，低于区间时直接按目标补，不用等评分（复查发现） */
+const SCORED_BUCKETS: ReadonlySet<AssetBucket> = new Set<AssetBucket>(["GOLD", "VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"]);
+
 export default async function HoldingsPage() {
   const [view, theses] = await Promise.all([getPortfolioView(), listThesisSummaries()]);
   // 占比与预留资金扣除已在服务层统一计算（Code Review M15），这里只做展示。
@@ -71,7 +74,7 @@ export default async function HoldingsPage() {
             <Card key={bucket} className="grid gap-4 p-5 md:grid-cols-[1fr_auto_auto] md:items-center">
               <div><h3 className="font-semibold">{BUCKET_LABELS[bucket]}</h3><p className="mt-1 text-sm text-[#68756e]">当前 {formatBps(actualBps)} · 目标 {formatBps(targetBps)} · 区间 {formatBps(target?.minBps ?? 0)}–{formatBps(target?.maxBps ?? 0)}</p></div>
               <div className="text-left md:text-right"><span className="block text-xs text-[#728078]">回到中性的参考差额</span><strong>{difference >= 0n ? "+" : "−"}{formatMoneyMinor(difference >= 0n ? difference : -difference)}</strong></div>
-              <StatusPill tone={withinBand ? "good" : "warn"}>{withinBand ? "保持" : actualBps > (target?.maxBps ?? 0) ? "停止新增" : "等待评分确认"}</StatusPill>
+              <StatusPill tone={withinBand ? "good" : "warn"}>{withinBand ? "保持" : actualBps > (target?.maxBps ?? 0) ? "停止新增" : SCORED_BUCKETS.has(bucket) ? "等待评分确认" : "低于区间：新增资金优先补足"}</StatusPill>
             </Card>
           );
         })}

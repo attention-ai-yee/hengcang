@@ -39,4 +39,20 @@ describe("Manual CSV / JSON 导入预览", () => {
     const conflict = previewManualObservationImport("json", JSON.stringify([base, { ...base, value: 13 }]));
     expect(conflict.errors[0].message).toContain("冲突值");
   });
+
+  it("价格、估值倍数必须大于 0，股息率不能为负（手工值永远优先，写错会长期污染评分）", () => {
+    const rows = [
+      { subjectId: "BROAD_EQUITY", metricKey: "PRICE_CLOSE", value: -5, asOf: "2026-08-20" },
+      { subjectId: "BROAD_EQUITY", metricKey: "PE_TTM", value: 0, asOf: "2026-08-20" },
+      { subjectId: "VALUE_DIVIDEND", metricKey: "DIVIDEND_YIELD", value: -1, asOf: "2026-08-20" },
+      { subjectId: "VALUE_DIVIDEND", metricKey: "DIVIDEND_YIELD", value: 0, asOf: "2026-08-21" },
+      { subjectId: "TECH_GROWTH", metricKey: "EARNINGS_GROWTH", value: -12, asOf: "2026-08-20" },
+    ];
+    const preview = previewManualObservationImport("json", JSON.stringify(rows));
+    expect(preview.errors.map((error) => [error.row, error.message])).toEqual([
+      [2, "收盘价必须大于 0"],
+      [3, "滚动市盈率必须大于 0"],
+      [4, "股息率不能为负数"],
+    ]);
+  });
 });

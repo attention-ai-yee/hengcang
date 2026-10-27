@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { sendJson } from "@/lib/client-fetch";
 import { ASSET_BUCKETS } from "@/domain/types";
 import { BUCKET_LABELS } from "@/lib/presentation";
 import { shanghaiDate } from "@/lib/shanghai";
@@ -17,10 +18,7 @@ export function HoldingForm() {
 
   async function submit(formData: FormData) {
     setStatus("保存中…");
-    const response = await fetch("/api/portfolio/holdings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const result = await sendJson("/api/portfolio/holdings", "POST", {
         name: formData.get("name"),
         symbol: formData.get("symbol") || null,
         instrumentType: formData.get("instrumentType"),
@@ -32,10 +30,10 @@ export function HoldingForm() {
         isApproximate: formData.get("isApproximate") === "on",
         needsBreakdown: formData.get("needsBreakdown") === "on",
         asOf: shanghaiDate(), // M14: 上海时区今天
-      }),
     });
-    setStatus(response.ok ? "已保存" : "保存失败，请检查输入");
-    if (response.ok) router.refresh();
+    // 失败时显示服务端给的具体字段错误（L12），而不是笼统的「保存失败」
+    setStatus(result.ok ? "已保存" : result.message);
+    if (result.ok) router.refresh();
   }
 
   return (

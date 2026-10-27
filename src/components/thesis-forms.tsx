@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { MAX_THESIS_BREAKERS } from "@/domain/thesis";
+import { sendJson } from "@/lib/client-fetch";
 import { shanghaiDate } from "@/lib/shanghai";
 import { draftThesisAction } from "@/server/actions/news";
 
@@ -15,10 +16,14 @@ interface BreakerItem {
 const inputClass = "rounded-xl border border-[#cfd8d2] bg-white px-3 py-2.5";
 const buttonClass = "rounded-xl bg-[#173f32] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60";
 
-async function readError(response: Response, fallback: string): Promise<string> {
-  const body = (await response.json().catch(() => null)) as { error?: { message?: string; fields?: Record<string, string[]> } } | null;
-  const field = body?.error?.fields ? Object.values(body.error.fields).flat()[0] : undefined;
-  return field ?? body?.error?.message ?? fallback;
+/** 保存成功后服务端返回的最新逻辑与条件（带 id 和状态） */
+function savedEditorState(data: unknown): { thesis: string; breakers: BreakerItem[] } | null {
+  const view = data as { thesis?: { thesis?: unknown } | null; breakers?: Array<{ id?: unknown; description?: unknown; status?: unknown }> } | null;
+  if (!view || typeof view.thesis?.thesis !== "string" || !Array.isArray(view.breakers)) return null;
+  const breakers = view.breakers.flatMap((item) => typeof item.id === "string" && typeof item.description === "string"
+    ? [{ id: item.id, description: item.description, status: typeof item.status === "string" ? item.status : undefined }]
+    : []);
+  return { thesis: view.thesis.thesis, breakers };
 }
 
 /**
@@ -57,23 +62,25 @@ export function ThesisEditor({ holdingId, initialThesis, initialBreakers, aiDraf
   async function save() {
     setSaving(true);
     setStatus("保存中…");
-    const response = await fetch(`/api/portfolio/holdings/${holdingId}/thesis`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        thesis,
-        breakers: breakers
-          .filter((item) => item.id || item.description.trim())
-          .map((item) => ({ ...(item.id ? { id: item.id } : {}), description: item.description })),
-      }),
+    const result = await sendJson(`/api/portfolio/holdings/${holdingId}/thesis`, "PUT", {
+      thesis,
+      breakers: breakers
+        .filter((item) => item.id || item.description.trim())
+        .map((item) => ({ ...(item.id ? { id: item.id } : {}), description: item.description })),
     });
     setSaving(false);
-    if (response.ok) {
-      setStatus("已保存");
-      router.refresh();
+    if (!result.ok) {
+      setStatus(result.message);
       return;
     }
-    setStatus(await readError(response, "保存失败，请检查输入"));
+    // 用服务端返回的条件（带新 id）更新编辑框：否则第二次保存会把刚加的条件当成「删掉再新建」（复查发现）
+    const saved = savedEditorState(result.data);
+    if (saved) {
+      setThesis(saved.thesis);
+      setBreakers(saved.breakers.length > 0 ? saved.breakers : [{ description: "" }]);
+    }
+    setStatus("已保存");
+    router.refresh();
   }
 
   return (
@@ -128,23 +135,19 @@ export function ThesisEventForm({ holdingId, breakers }: { holdingId: string; br
     setStatus("记录中…");
     const sourceUrl = String(formData.get("sourceUrl") ?? "").trim();
     const breakerId = String(formData.get("breakerId") ?? "");
-    const response = await fetch(`/api/portfolio/holdings/${holdingId}/thesis/events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        kind: "NEWS",
-        occurredOn: formData.get("occurredOn"),
-        summary: formData.get("summary"),
-        sourceUrl: sourceUrl || null,
-        breakerId: breakerId || null,
-      }),
-    });
-    if (response.ok) {
+    const result = await sendJson(`/api/portfolio/holdings/${holdingId}/thesis/events`, "POST", {
+      kind: "NEWS",
+      occurredOn: formData.get("occurredOn"),
+      summary: formData.get("summary"),
+      sourceUrl: sourceUrl || null,
+      breakerId: breakerId || null,
+    }, "记录失败，请检查输入");
+    if (result.ok) {
       setStatus(breakerId ? "已记录，并触发了对应的失效条件" : "已记录");
       router.refresh();
       return;
     }
-    setStatus(await readError(response, "记录失败，请检查输入"));
+    setStatus(result.message);
   }
 
   return (
@@ -174,17 +177,15 @@ export function ThesisReviewForm({ holdingId, breakerId, submitLabel }: { holdin
 
   async function submit(formData: FormData) {
     setStatus("保存中…");
-    const response = await fetch(`/api/portfolio/holdings/${holdingId}/thesis/events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "REVIEW", occurredOn: shanghaiDate(), summary: formData.get("summary"), breakerId: breakerId ?? null }),
+    const result = await sendJson(`/api/portfolio/holdings/${holdingId}/thesis/events`, "POST", {
+      kind: "REVIEW", occurredOn: shanghaiDate(), summary: formData.get("summary"), breakerId: breakerId ?? null,
     });
-    if (response.ok) {
+    if (result.ok) {
       setStatus("已保存复核");
       router.refresh();
       return;
     }
-    setStatus(await readError(response, "保存失败，请检查输入"));
+    setStatus(result.message);
   }
 
   return (

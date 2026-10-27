@@ -1,19 +1,25 @@
 import { eq } from "drizzle-orm";
 import { getDatabase } from "@/db/client";
-import { DEFAULT_PORTFOLIO_ID, getPortfolioRecord, listHoldings } from "@/db/queries";
+import { DEFAULT_PORTFOLIO_ID, getPortfolioRecord, getRiskLimits, listAllocationTargets, listHoldings } from "@/db/queries";
 import { portfolios } from "@/db/schema";
 import { DEFAULT_ALLOCATION_BANDS, DEFAULT_RISK_LIMITS } from "@/domain/settings";
 import { DEFAULT_SCORING_CONFIG } from "@/domain/scoring";
 import { apiError, apiSuccess, parseJsonBody, zodFields } from "@/lib/api";
 import { reservedCashPayloadSchema } from "@/lib/validation";
 
+/** 返回数据库里实际生效的目标与上限（Code Review L17：原来返回写死的默认值，改过目标的组合会对不上）；默认值另列。 */
 export async function GET() {
-  const portfolio = await getPortfolioRecord();
+  const [portfolio, targets, limits] = await Promise.all([getPortfolioRecord(), listAllocationTargets(), getRiskLimits()]);
   return apiSuccess({
     baseCurrency: "CNY",
     timezone: "Asia/Shanghai",
-    allocationBands: DEFAULT_ALLOCATION_BANDS,
-    riskLimits: DEFAULT_RISK_LIMITS,
+    allocationBands: targets.length > 0
+      ? Object.fromEntries(targets.map((target) => [target.assetBucket, { targetBps: target.targetBps, minBps: target.minBps, maxBps: target.maxBps }]))
+      : DEFAULT_ALLOCATION_BANDS,
+    riskLimits: limits
+      ? { singleStockBps: limits.singleStockBps, thematicEtfBps: limits.thematicEtfBps, themeBps: limits.themeBps, cooldownDays: limits.cooldownDays }
+      : DEFAULT_RISK_LIMITS,
+    defaults: { allocationBands: DEFAULT_ALLOCATION_BANDS, riskLimits: DEFAULT_RISK_LIMITS },
     scoring: DEFAULT_SCORING_CONFIG,
     reservedCashMinor: portfolio?.reservedCashMinor ?? "0",
     providers: {

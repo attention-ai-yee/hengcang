@@ -49,7 +49,7 @@ pnpm db:migrate    # 应用 migration
 pnpm db:seed       # 写入本地示例资产模板
 pnpm data:refresh  # 自动拉取 Tushare 数据并重算评分
 pnpm backtest      # 只读回测报告（--persist 落库，--cost N 覆盖成本假设）
-pnpm worker        # 常驻定时进程：每 6 小时刷新数据，并每天扫描一次新闻（Ctrl+C 退出）
+pnpm worker        # 常驻定时进程：每 30 分钟检查一次，数据距上次成功刷新满 6 小时就刷新，新闻每天扫一次（Ctrl+C 退出）
 pnpm news:scan     # AI 新闻监控：扫描到期的投资逻辑（--force 立即扫描全部）
 ```
 

@@ -15,7 +15,8 @@ import { shanghaiDate } from "@/lib/shanghai";
  * 4. 文章有发布日期且在最近 30 天内（日期不明的一律不自动触发；模型给的事件日期也必须在 30 天内）；
  * 5. 来源权威度不低于 2（搜索接口给出的 -1–4 分，-1 为未知）。
  * 另外：你对某条条件写过复核或撤销过误判后，不晚于那一天发生的事件不再触发它（同一条新闻换个网站转载不会反复触发），
- * 之后的新事件也必须有明确的事件日期才自动触发。
+ * 之后的新事件也必须有明确的事件日期才自动触发；不晚于写下（或改写）这条条件那天的事件也不自动触发，
+ * 只标「可能触发」——多半是条件写下时就已成立，该改写条件而不是暂停新增。
  * 自动触发只会「暂停新增」，不会卖出；误判可以一键撤销。
  */
 export const NEWS_MAX_AGE_DAYS = 30;
@@ -125,6 +126,29 @@ export function normalizeNewsUrl(raw: string): string | null {
   return url.toString();
 }
 
+/**
+ * 来源名：搜索结果偶尔给出十六进制编码的 UTF-8 名称（如 4a69656d69616e2e636f6d = Jiemian.com、
+ * e8af81e588b8e697b6e68aa5 = 证券时报），解码；没有来源名时用链接的域名。
+ */
+export function displaySiteName(siteName: string | null, url: string): string | null {
+  const name = siteName?.trim();
+  if (name && name.length >= 8 && name.length % 2 === 0 && /^[0-9a-f]+$/i.test(name)) {
+    try {
+      const bytes = Uint8Array.from(name.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (decoded && !/[\u0000-\u001f\u007f]/.test(decoded)) return decoded;
+    } catch {
+      // 不是合法的 UTF-8：按原样显示
+    }
+  }
+  if (name) return name;
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
 /** 搜索词 = 基础词 + after: 运算符（只搜最近的新闻）；总长不超过 128 个字符，超出时截短基础词。 */
 export function buildSearchQuery(base: string, afterDay: string): string {
   const operator = ` after:${afterDay}`;
@@ -133,15 +157,20 @@ export function buildSearchQuery(base: string, afterDay: string): string {
   return `${trimmed}${operator}`;
 }
 
+/** 标题去重用的键：去掉「title:」前缀和「 - 网站名」之类的后缀，再忽略空白、标点、全半角差异。 */
+export function headlineKey(title: string): string {
+  return normalizeForQuote(title.replace(/^\s*title:\s*/i, "").split(/\s+[-|_｜]\s+/)[0] ?? "");
+}
+
 /**
- * 去重、去掉看过的链接、过滤超过时间窗的文章（日期未知的保留，交给模型和触发规则把关），
- * 按 rerank_score 取前若干条。
+ * 去重（同一链接，或同一标题被多家网站转载）、去掉看过的链接、过滤超过时间窗的文章
+ * （日期未知的保留，交给模型和触发规则把关），按 rerank_score 取前若干条。
  */
 export function selectCandidates(
   hits: SearchHit[],
   seenUrls: Set<string>,
   today: string,
-  options: { maxAgeDays?: number; limit?: number } = {},
+  options: { maxAgeDays?: number; limit?: number; seenHeadlines?: Set<string> } = {},
 ): NewsCandidate[] {
   const maxAgeDays = options.maxAgeDays ?? NEWS_MAX_AGE_DAYS;
   const byUrl = new Map<string, NewsCandidate>();
@@ -157,7 +186,7 @@ export function selectCandidates(
     const candidate: NewsCandidate = {
       url,
       title: hit.title.trim(),
-      siteName: hit.siteName,
+      siteName: displaySiteName(hit.siteName, url),
       publishedOn,
       snippet: hit.snippet,
       summary: hit.summary,
@@ -168,9 +197,13 @@ export function selectCandidates(
     const existing = byUrl.get(url);
     if (!existing || existing.rerankScore < candidate.rerankScore) byUrl.set(url, candidate);
   }
-  return [...byUrl.values()]
-    .sort((left, right) => right.rerankScore - left.rerankScore)
-    .slice(0, options.limit ?? NEWS_MAX_CANDIDATES);
+  // 同一篇稿子常被多家网站转载：同标题只留 rerank 最高的一条，以前看过的标题也不再判断，把名额让给别的新闻
+  const byHeadline = new Map<string, NewsCandidate>();
+  for (const candidate of [...byUrl.values()].sort((left, right) => right.rerankScore - left.rerankScore)) {
+    const key = headlineKey(candidate.title) || candidate.url;
+    if (!byHeadline.has(key) && !options.seenHeadlines?.has(key)) byHeadline.set(key, candidate);
+  }
+  return [...byHeadline.values()].slice(0, options.limit ?? NEWS_MAX_CANDIDATES);
 }
 
 /** 比对证据前的规范化：全半角统一、去掉空白、Markdown 符号和标点。 */
@@ -410,6 +443,8 @@ export function decideTrigger(input: {
   breakerActive: boolean;
   /** 你最近一次对这条条件写复核或撤销误判的日期（上海时区） */
   clearedOn?: string | null;
+  /** 这条条件写下或最后改写的日期（上海时区） */
+  writtenOn?: string | null;
   today: string;
 }): { verdict: "TRIGGER" | "POSSIBLE" | "RELATED"; reasons: string[] } {
   const { verification } = input;
@@ -425,6 +460,7 @@ export function decideTrigger(input: {
   if (!withinWindow(input.publishedOn, input.today)) reasons.push(`发布日期不明或超过 ${NEWS_MAX_AGE_DAYS} 天`);
   else if (verification.occurredOn && !withinWindow(verification.occurredOn, input.today)) reasons.push(`事件日期超过 ${NEWS_MAX_AGE_DAYS} 天`);
   if (input.clearedOn && !verification.occurredOn) reasons.push("这条条件复核过，事件日期不明的不自动触发");
+  if (input.writtenOn && eventDay && eventDay <= input.writtenOn) reasons.push("事件不晚于写下这条条件那天：可能写下时就已成立，请确认或改写条件");
   if (input.authority < NEWS_MIN_AUTHORITY_FOR_AUTO) reasons.push("来源权威度不足");
   return reasons.length === 0 ? { verdict: "TRIGGER", reasons } : { verdict: "POSSIBLE", reasons };
 }
@@ -442,8 +478,12 @@ export function buildDraftMessages(holding: HoldingForPrompt & { bucketLabel: st
         `持仓：${holdingLine(holding)}；资产类别：${holding.bucketLabel}${holding.theme ? `；主题：${holding.theme}` : ""}`,
         "请起草：",
         "- thesis：为什么持有它、靠什么赚钱，100–200 字，事实清楚、不夸张；",
-        "- breakers：3–5 条可验证的失效条件，每条不超过 40 字。要写能从公告、财报、官方数据或权威新闻中核实的事实，"
-          + "带具体的指标、主体或幅度；不要写股价涨跌，也不要写「基本面变差」这类说不清的话。",
+        "- breakers：3–5 条失效条件，每条不超过 40 字，要求：",
+        "  1. 写「投资逻辑被破坏」的信号：公司或重仓公司的经营恶化（营收、利润、订单、毛利率）、关键客户或竞争格局变化、监管政策收紧等；",
+        "  2. 现在还没有发生——不要写写下时就已经成立的事实（比如指数本来就有的集中度、产品本来就有的费率）；",
+        "  3. 能从公告、财报、官方数据或权威新闻中核实，带具体的指标、主体或幅度；",
+        "  4. ETF 写它的重仓公司和行业，不写费率、规模、成交额、指数编制规则这类产品细节；",
+        "  5. 不写股价涨跌，也不写「基本面变差」这类说不清的话。",
         '输出格式：{"thesis": "…", "breakers": ["…", "…"]}',
       ].join("\n"),
     },

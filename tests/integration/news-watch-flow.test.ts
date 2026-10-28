@@ -43,9 +43,9 @@ const CATL = hit({
 });
 const FORECAST = hit({ title: "锂电设备资本开支或将放缓", url: "https://news.example.com/capex-view", summary: "券商观点", siteName: "示例证券", authority: 2, rerankScore: 2.0 });
 const RUMOR = hit({
-  title: "小站爆料锂电设备投资大降",
+  title: "小站爆料先导智能毛利率连降",
   url: "https://blog.example.com/rumor",
-  content: "据统计，今年三季度锂电设备行业资本开支同比下滑35%。",
+  content: "据统计，先导智能毛利率已连续两个季度下滑，三季度降至31%。",
   siteName: "某博客",
   authority: 1,
   rerankScore: 1.9,
@@ -54,6 +54,9 @@ const Q3 = hit({ title: "先导智能发布三季报", url: "https://news.exampl
 const AD = hit({ title: "十大牛股盘点", url: "https://ads.example.com/top10", date: null, authority: 0, rerankScore: 0.5 });
 const OLD = hit({ title: "去年的行业数据", url: "https://news.example.com/old", date: "2026-08-20T00:00:00Z", authority: 4, rerankScore: 3 });
 const CATL_COPY = { ...CATL, url: "https://news.example.com/catl?utm_medium=app", rerankScore: 2.4 };
+/** 同一件事换了说法的转载（标题不同，标题去重拦不住，要靠「复核 / 撤销之后」的规则） */
+const REWORDED_1 = "宁德时代削减明年设备采购，先导智能订单受影响";
+const REWORDED_2 = "宁德时代下调设备采购，锂电设备商承压";
 
 class FakeNewsClient implements NewsClient {
   readonly model = "fake-model";
@@ -85,8 +88,10 @@ class FakeNewsClient implements NewsClient {
     if (prompt.includes("候选新闻")) {
       const screening: Record<string, { verdict: string; breaker?: string }> = {
         [CATL.title]: { verdict: "POSSIBLE", breaker: "B2" },
+        [REWORDED_1]: { verdict: "POSSIBLE", breaker: "B2" },
+        [REWORDED_2]: { verdict: "POSSIBLE", breaker: "B2" },
         [FORECAST.title]: { verdict: "POSSIBLE", breaker: "B1" },
-        [RUMOR.title]: { verdict: "POSSIBLE", breaker: "B1" },
+        [RUMOR.title]: { verdict: "POSSIBLE", breaker: "B3" },
         [Q3.title]: { verdict: "RELATED" },
       };
       return {
@@ -100,14 +105,14 @@ class FakeNewsClient implements NewsClient {
     }
     if (prompt.includes("要核对的失效条件")) {
       const title = /^文章：(.+?)（/m.exec(prompt)?.[1];
-      if (title === CATL.title) {
+      if (title === CATL.title || title === REWORDED_1 || title === REWORDED_2) {
         return { triggered: true, confidence: "HIGH", occurredOn: "2026-10-15", evidence: "公司下调2027年设备采购计划，对先导智能的订单同比减少40%", summary: "宁德时代下调2027年设备采购计划，对先导智能订单同比减少40%" };
       }
       if (title === FORECAST.title) {
         return { triggered: true, confidence: "MEDIUM", occurredOn: null, evidence: "分析师预计明年锂电设备资本开支可能同比下滑三成", summary: "券商预计明年锂电设备资本开支下滑" };
       }
       if (title === RUMOR.title) {
-        return { triggered: true, confidence: "HIGH", occurredOn: "2026-10-18", evidence: "今年三季度锂电设备行业资本开支同比下滑35%", summary: "博客称三季度行业资本开支下滑35%" };
+        return { triggered: true, confidence: "HIGH", occurredOn: "2026-10-18", evidence: "先导智能毛利率已连续两个季度下滑", summary: "博客称先导智能毛利率连续两个季度下滑" };
       }
       return { triggered: false, confidence: "LOW" };
     }
@@ -120,6 +125,7 @@ let holdingId = "";
 let thesisId = "";
 let capexId = "";
 let customerId = "";
+let marginId = "";
 const fake = new FakeNewsClient([CATL, FORECAST, RUMOR, Q3, AD, OLD, CATL_COPY]);
 
 function itemByUrl(url: string) {
@@ -143,10 +149,10 @@ beforeAll(async () => {
   holdingId = holding.id;
   const view = await saveThesis(holdingId, {
     thesis: "锂电扩产周期带动设备订单，龙头份额稳定。",
-    breakers: [{ description: "锂电设备行业资本开支同比下滑超过 30%" }, { description: "最大客户订单明显缩减" }],
+    breakers: [{ description: "锂电设备行业资本开支同比下滑超过 30%" }, { description: "最大客户订单明显缩减" }, { description: "毛利率连续两个季度下滑" }],
   }, new Date("2026-10-01T02:00:00Z"));
   thesisId = view.thesis?.id ?? "";
-  [capexId, customerId] = view.breakers.map((item) => item.id);
+  [capexId, customerId, marginId] = view.breakers.map((item) => item.id);
 });
 
 afterAll(() => {
@@ -177,7 +183,7 @@ describe("AI 新闻监控", () => {
 
     expect(itemByUrl("https://news.example.com/catl")).toMatchObject({ verdict: "TRIGGER", breakerId: customerId, authority: 3 });
     expect(itemByUrl(FORECAST.url)).toMatchObject({ verdict: "POSSIBLE", breakerId: capexId, status: "OPEN" });
-    expect(itemByUrl(RUMOR.url)).toMatchObject({ verdict: "POSSIBLE", breakerId: capexId, status: "OPEN" });
+    expect(itemByUrl(RUMOR.url)).toMatchObject({ verdict: "POSSIBLE", breakerId: marginId, status: "OPEN" });
     expect(itemByUrl(Q3.url)).toMatchObject({ verdict: "RELATED", breakerId: null });
     expect(itemByUrl(AD.url)).toMatchObject({ verdict: "IRRELEVANT" });
     expect(getDatabase().select().from(newsItems).where(eq(newsItems.url, OLD.url)).all()).toHaveLength(0);
@@ -213,6 +219,7 @@ describe("AI 新闻监控", () => {
       expect(prompt).not.toContain("5000000");
       expect(prompt).not.toContain(capexId);
       expect(prompt).not.toContain(customerId);
+      expect(prompt).not.toContain(marginId);
     }
     const screening = fake.prompts.find((prompt) => prompt.includes("候选新闻")) ?? "";
     // 已触发的条件不再交给模型（这里两条都还是 ACTIVE）
@@ -268,13 +275,16 @@ describe("AI 新闻监控", () => {
 
   it("撤销之后，同一条新闻换个网站转载不会再次触发（复查发现）", async () => {
     const breaches = getDatabase().select().from(signals).where(eq(signals.signalType, "THESIS_BREACH")).all().length;
-    // 转载 1：发布日期早于撤销那天 → 初筛就降为相关，不再进待确认
-    const repostBefore = { ...CATL, url: "https://other.example.com/catl-repost", date: "2026-10-18T02:00:00Z" };
-    // 转载 2：撤销后才发布，但复核出的事件日期（10-15）不晚于撤销那天 → 相关
-    const repostAfter = { ...CATL, url: "https://third.example.com/catl-copy", date: "2026-10-20T02:00:00Z" };
-    const reposts = new FakeNewsClient([repostBefore, repostAfter]);
+    // 原标题转载：以前看过的标题直接跳过，不再判断
+    const sameHeadline = { ...CATL, url: "https://mirror.example.com/catl", date: "2026-10-18T03:00:00Z" };
+    // 换了说法的转载 1：发布日期早于撤销那天 → 初筛就降为相关，不再进待确认
+    const repostBefore = { ...CATL, title: REWORDED_1, url: "https://other.example.com/catl-repost", date: "2026-10-18T02:00:00Z" };
+    // 换了说法的转载 2：撤销后才发布，但复核出的事件日期（10-15）不晚于撤销那天 → 相关
+    const repostAfter = { ...CATL, title: REWORDED_2, url: "https://third.example.com/catl-copy", date: "2026-10-20T02:00:00Z" };
+    const reposts = new FakeNewsClient([sameHeadline, repostBefore, repostAfter]);
     const report = await scanNews({ client: reposts, now: later(48), force: true });
-    expect(report).toMatchObject({ status: "READY", triggered: 0, possible: 0 });
+    expect(report).toMatchObject({ status: "READY", triggered: 0, possible: 0, newItems: 2 });
+    expect(getDatabase().select().from(newsItems).where(eq(newsItems.url, sameHeadline.url)).all()).toHaveLength(0);
     expect(itemByUrl(repostBefore.url).verdict).toBe("RELATED");
     expect(itemByUrl(repostAfter.url).verdict).toBe("RELATED");
     expect(breaker(customerId)?.status).toBe("ACTIVE");

@@ -14,6 +14,7 @@ import {
   dayBefore,
   decideTrigger,
   fallbackQueries,
+  headlineKey,
   parseDraft,
   parseQueries,
   parseScreening,
@@ -181,6 +182,8 @@ async function scanThesis(client: NewsClient, thesis: ThesisRow, holding: Holdin
       .at(-1);
     if (latest) clearedOn.set(breaker.id, shanghaiDate(new Date(latest)));
   }
+  // 条件写下或最后改写的日期：早于这一天发生的事件可能写下时就已成立，只提示、不自动触发
+  const writtenOn = new Map(breakers.map((breaker) => [breaker.id, shanghaiDate(new Date(breaker.updatedAt))]));
   const queries = await ensureQueries(client, thesis, holding, breakers.map((breaker) => breaker.description), warnings);
 
   const afterDay = dayBefore(today, NEWS_MAX_AGE_DAYS);
@@ -198,8 +201,10 @@ async function scanThesis(client: NewsClient, thesis: ThesisRow, holding: Holdin
   // 一个搜索都没成功：不算扫描过，下一轮重试
   if (queries.length > 0 && searchFailures === queries.length) throw new Error(warnings.at(-1) ?? "搜索全部失败");
 
-  const seen = new Set(db.select({ url: newsItems.url }).from(newsItems).where(eq(newsItems.thesisId, thesis.id)).all().map((row) => row.url));
-  const candidates = selectCandidates(hits, seen, today);
+  const seenRows = db.select({ url: newsItems.url, title: newsItems.title }).from(newsItems).where(eq(newsItems.thesisId, thesis.id)).all();
+  const seen = new Set(seenRows.map((row) => row.url));
+  const seenHeadlines = new Set(seenRows.map((row) => headlineKey(row.title)).filter(Boolean));
+  const candidates = selectCandidates(hits, seen, today, { seenHeadlines });
   let triggered = 0;
   let possible = 0;
   if (candidates.length > 0) {
@@ -256,6 +261,7 @@ async function scanThesis(client: NewsClient, thesis: ThesisRow, holding: Holdin
           authority: candidate.authority,
           breakerActive: !triggeredNow.has(breaker.id),
           clearedOn: clearedOn.get(breaker.id) ?? null,
+          writtenOn: writtenOn.get(breaker.id) ?? null,
           today,
         });
         if (decision.verdict === "TRIGGER") triggeredNow.add(breaker.id);
@@ -270,6 +276,21 @@ async function scanThesis(client: NewsClient, thesis: ThesisRow, holding: Holdin
         if (isAccountError(error)) throw error;
         warnings.push(`复核「${candidate.title}」失败，留作待确认：${errorText(error)}`);
       }
+    }
+
+    // 每条条件最多留一条待确认：同一轮已触发的、或之前已有待确认新闻的条件，其余文章只算相关（同一事实常被多家转载）
+    const pendingBreakers = new Set(
+      db.select({ breakerId: newsItems.breakerId }).from(newsItems)
+        .where(and(eq(newsItems.thesisId, thesis.id), eq(newsItems.verdict, "POSSIBLE"), eq(newsItems.status, "OPEN")))
+        .all()
+        .flatMap((row) => row.breakerId ? [row.breakerId] : []),
+    );
+    for (const decision of decisions.values()) if (decision.verdict === "TRIGGER" && decision.breakerId) pendingBreakers.add(decision.breakerId);
+    for (const [index] of candidates.entries()) {
+      const decision = decisions.get(index) as Decision;
+      if (decision.verdict !== "POSSIBLE" || !decision.breakerId) continue;
+      if (pendingBreakers.has(decision.breakerId)) decisions.set(index, { ...decision, verdict: "RELATED", breakerId: null });
+      else pendingBreakers.add(decision.breakerId);
     }
 
     for (const [index, candidate] of candidates.entries()) {

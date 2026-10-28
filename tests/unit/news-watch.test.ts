@@ -7,6 +7,7 @@ import {
   buildSearchQuery,
   dayBefore,
   decideTrigger,
+  displaySiteName,
   evidenceFound,
   fallbackQueries,
   normalizeNewsUrl,
@@ -73,6 +74,16 @@ describe("buildSearchQuery", () => {
   });
 });
 
+describe("displaySiteName", () => {
+  it("十六进制编码的名称按 UTF-8 解码；没有来源名时用链接的域名（真实接口试跑发现）", () => {
+    expect(displaySiteName("4a69656d69616e2e636f6d", "https://www.jiemian.com/a")).toBe("Jiemian.com");
+    expect(displaySiteName("e8af81e588b8e697b6e68aa5", "https://www.stcn.com/a")).toBe("证券时报");
+    expect(displaySiteName("东方财富", "https://finance.eastmoney.com/a")).toBe("东方财富");
+    expect(displaySiteName(null, "https://finance.eastmoney.com/a")).toBe("finance.eastmoney.com");
+    expect(displaySiteName("deadbeef", "https://x.example.com/a")).toBe("deadbeef");
+  });
+});
+
 describe("selectCandidates", () => {
   it("同一链接只留 rerank 高的；看过的、超过 30 天的、日期在未来的丢掉；日期未知的保留", () => {
     const candidates = selectCandidates([
@@ -88,6 +99,16 @@ describe("selectCandidates", () => {
       ["A 高分", "https://news.example.com/a", "2026-10-18"],
       ["无日期", "https://news.example.com/nodate", null],
     ]);
+  });
+
+  it("同一标题被多家网站转载只留 rerank 最高的一条（去掉 title: 前缀和「 - 网站名」后缀再比）", () => {
+    const candidates = selectCandidates([
+      hit({ title: "“宁王”跌掉一半，真正的坎在2027年", url: "https://a.example.com/1", rerankScore: 1.5 }),
+      hit({ title: "title: “宁王”跌掉一半，真正的坎在2027年", url: "https://b.example.com/2", rerankScore: 2.0 }),
+      hit({ title: "「宁王」跌掉一半，真正的坎在2027年 - 投资界", url: "https://c.example.com/3", rerankScore: 1.8 }),
+      hit({ title: "先导智能发布三季报", url: "https://d.example.com/4", rerankScore: 1.0 }),
+    ], new Set(), TODAY);
+    expect(candidates.map((candidate) => candidate.url)).toEqual(["https://b.example.com/2", "https://d.example.com/4"]);
   });
 
   it("按 rerank_score 取前若干条", () => {
@@ -147,6 +168,13 @@ describe("decideTrigger", () => {
 
   it("文章没有发布日期：模型从正文里推出一个 30 天内的日期也不自动触发（复查发现）", () => {
     expect(decideTrigger({ ...base, publishedOn: null })).toEqual({ verdict: "POSSIBLE", reasons: ["发布日期不明或超过 30 天"] });
+  });
+
+  it("事件不晚于写下这条条件那天：可能写下时就已成立，只标可能触发（真实接口试跑发现）", () => {
+    // 例：AI 起草了「指数前十大权重合计超过 70%」，而这本来就成立——第一轮扫描不应直接暂停新增
+    expect(decideTrigger({ ...base, writtenOn: "2026-10-18" }))
+      .toEqual({ verdict: "POSSIBLE", reasons: ["事件不晚于写下这条条件那天：可能写下时就已成立，请确认或改写条件"] });
+    expect(decideTrigger({ ...base, writtenOn: "2026-10-10" }).verdict).toBe("TRIGGER");
   });
 
   it("复核或撤销过的条件：不晚于那一天的事件只算相关；之后的新事件要有明确日期才自动触发（复查发现）", () => {
@@ -237,6 +265,10 @@ describe("提示词", () => {
     for (const messages of [buildQueryMessages(holding, "逻辑", ["条件"]), buildDraftMessages({ ...holding, bucketLabel: "科技与成长", theme: "锂电设备" })]) {
       expect(messages.map((message) => message.content).join("\n")).toContain("JSON");
     }
+    // 起草要求：只写逻辑被破坏的信号、写下时尚未发生；ETF 写重仓公司而不是产品细节（真实接口试跑发现）
+    const draft = buildDraftMessages({ ...holding, bucketLabel: "科技与成长", theme: "锂电设备" }).map((message) => message.content).join("\n");
+    expect(draft).toContain("现在还没有发生");
+    expect(draft).toContain("ETF 写它的重仓公司和行业");
   });
 });
 

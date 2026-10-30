@@ -117,7 +117,7 @@ describe("refreshFundamentals 增量模式", () => {
     const rows = await refreshFundamentals(provider, [BROAD], "2026-11-07", { start: "2025-08-07", end: "2026-11-07" }, "INCREMENTAL", [], FETCHED_AT);
     const latest = bucketGrowthRows(rows, "INDEX_EARNINGS_GROWTH").at(-1);
     expect(latest?.asOf).toBe("2026-10-30");
-    expect(latest?.value).toBeCloseTo(-18.33, 2);
+    expect(latest?.value).toBe(-25); // 三只等权：0、−30、−25 的加权中位数
   });
 
   it("SKIP 模式不请求任何数据", async () => {

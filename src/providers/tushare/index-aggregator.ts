@@ -105,6 +105,24 @@ export function winsorize(values: number[], lowerPercentile = 0.05, upperPercent
   return values.map((value) => Math.min(upper, Math.max(lower, value)));
 }
 
+/**
+ * 加权中位数：按值排序后累计权重刚过一半的那个值；正好落在两个值之间时取二者平均
+ * （两只权重相同时等于均值）。
+ */
+export function weightedMedian(rows: Array<{ value: number; weight: number }>): number | null {
+  const sorted = rows.filter((row) => row.weight > 0 && Number.isFinite(row.value)).sort((left, right) => left.value - right.value);
+  const total = sorted.reduce((sum, row) => sum + row.weight, 0);
+  if (sorted.length === 0 || total <= 0) return null;
+  const half = total / 2;
+  let cumulative = 0;
+  for (const [index, row] of sorted.entries()) {
+    cumulative += row.weight;
+    if (Math.abs(cumulative - half) <= total * 1e-9 && index + 1 < sorted.length) return (row.value + sorted[index + 1].value) / 2;
+    if (cumulative > half) return row.value;
+  }
+  return sorted[sorted.length - 1].value;
+}
+
 export function aggregateFundamentalMetric(
   metricKey: Extract<CanonicalMetricKey, "ROE" | "EARNINGS_GROWTH" | "REVENUE_GROWTH" | "INDEX_EARNINGS_GROWTH">,
   weights: IndexWeightPoint[],
@@ -132,10 +150,16 @@ export function aggregateFundamentalMetric(
   const validWeight = usable.reduce((sum, row) => sum + row.weight, 0);
   const coverage = totalWeight > 0 ? validWeight / totalWeight : 0;
   const quality = qualityFor(coverage);
+  // 增长率用加权中位数（「按指数权重算，典型公司的增速」）：小基数公司动辄几百上千个点，
+  // 去掉两端 5% 后的均值仍会被拉高好几倍，体检看正负号时会掩盖普遍下滑。
+  // 2026-10-30 真实数据：创业板指成分股 95 分位 +1386%，加权均值 +128%，加权中位数 +42%。ROE 没有这种长尾，仍用去极值均值。
   const clipped = winsorize(usable.map((row) => row.value));
+  const aggregate = metricKey === "ROE"
+    ? usable.reduce((sum, row, index) => sum + row.weight * clipped[index], 0) / validWeight
+    : weightedMedian(usable);
   return {
     metricKey,
-    value: quality && validWeight > 0 ? usable.reduce((sum, row, index) => sum + row.weight * clipped[index], 0) / validWeight : null,
+    value: quality && validWeight > 0 ? aggregate : null,
     ...(reportPeriod ? { reportPeriod } : {}),
     constituentCoverage: coverage,
     constituentCount: validWeights.length,

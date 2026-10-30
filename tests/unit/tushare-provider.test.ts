@@ -57,6 +57,20 @@ describe("Tushare canonical adapter", () => {
     ]);
   });
 
+  it("财务指标：同一报告期同一公告日有修正前后两条时只留 update_flag = 1 的（不论顺序）", async () => {
+    const fields = ["ts_code", "ann_date", "end_date", "roe", "netprofit_yoy", "tr_yoy", "or_yoy", "q_sales_yoy", "update_flag"];
+    const original = ["600900.SH", "20260430", "20260331", 3.1, 25.0, 5.0, null, null, "0"];
+    const revised = ["600900.SH", "20260430", "20260331", 3.2, 30.5, 6.0, null, null, "1"];
+    const annual = ["600900.SH", "20260430", "20251231", 15.0, 6.17, 4.0, null, null, "0"];
+    for (const items of [[original, revised, annual], [revised, original, annual]]) {
+      mockTushare({ fields, items });
+      const result = await new TushareProvider("test-token").getEquityFundamentals("600900.SH", { start: "2025-10-30", end: "2026-10-30" });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.map((row) => [row.reportPeriod, row.earningsGrowth, row.roe])).toEqual([["2026-03-31", 30.5, 3.2], ["2025-12-31", 6.17, 15]]);
+    }
+  });
+
   it("不再把 Tushare us_trycr 伪标为实际利率", async () => {
     const provider = new TushareProvider("test-token");
     const result = await provider.getMacroSeries({

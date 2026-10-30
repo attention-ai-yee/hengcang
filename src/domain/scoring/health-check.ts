@@ -15,6 +15,8 @@ export type HealthCheckStatus = "OK" | "BREACH" | "MISSING";
 export interface HealthCheckPoint {
   value: number;
   asOf: string;
+  /** 这一点按权重占主导的报告期（财报汇总才有） */
+  reportPeriod?: string;
 }
 
 export interface HealthCheckResult {
@@ -47,18 +49,43 @@ function round2(value: number): number {
 
 /** 相邻两个报告期最多相隔约两个季度（一季报和年报常常同一天发，可能直接从三季报跳到一季报） */
 const MAX_REPORT_PERIOD_GAP_DAYS = 200;
+/** 主导报告期占比与这一期最高值相差不到 2 个百分点的点算一样「纯」，取其中最新的（权重名单最新） */
+const PERIOD_SHARE_TOLERANCE = 0.02;
+
+const PERIOD_NAMES: Record<string, string> = { "03-31": "一季报", "06-30": "半年报", "09-30": "三季报", "12-31": "年报" };
+
+/** 报告期的中文名：2026-06-30 → 2026 半年报 */
+export function reportPeriodLabel(period: string): string {
+  const name = PERIOD_NAMES[period.slice(5, 10)];
+  return name ? `${period.slice(0, 4)} ${name}` : period;
+}
+
+export function formatHealthPoint(point: HealthCheckPoint): string {
+  return `${point.value} @ ${point.asOf}${point.reportPeriod ? `（${reportPeriodLabel(point.reportPeriod)}为主）` : ""}`;
+}
 
 /**
  * 找「上一期」：
- * - 汇总点带报告期时按报告期找：最新一点之前、主导报告期更早的最近一点。按公告日算间隔会出错——
+ * - 汇总点带报告期时按报告期找：比最新一点的主导报告期早的最近一期。按公告日算间隔会出错——
  *   半年报截止 8/31、三季报截止 10/31 只隔 61 天，固定的 80 天间隔会拿三季报去比一季报。
+ * - 那一期的点里取主导报告期占比最高的：财报季里紧挨着最新点的前几天，大半权重已经换成新财报，
+ *   拿它当上一期等于新财报跟自己比（2026-10-30 真实数据：沪深300 上一期取到 10-29 的 +18.18%，
+ *   那天三季报已占四成多；纯半年报时是 +26.17%）。旧数据没有占比，取那一期最近的点。
  * - 旧数据没有报告期（全量回填一次后就都有了）：退回按日期间隔取约一个季度前的点。
  */
 function findPreviousReport(history: HistoricalObservation[], latest: HistoricalObservation, config: ScoringConfig): HistoricalObservation | undefined {
   const period = latest.reportPeriod;
   if (period) {
-    const earlier = [...history].reverse().find((point) => point.reportPeriod !== undefined && point.reportPeriod < period);
-    if (earlier?.reportPeriod) return dayNumber(period) - dayNumber(earlier.reportPeriod) <= MAX_REPORT_PERIOD_GAP_DAYS ? earlier : undefined;
+    const earlierPeriod = history.reduce<string | undefined>(
+      (best, point) => (point.reportPeriod !== undefined && point.reportPeriod < period && (best === undefined || point.reportPeriod > best) ? point.reportPeriod : best),
+      undefined,
+    );
+    if (earlierPeriod) {
+      if (dayNumber(period) - dayNumber(earlierPeriod) > MAX_REPORT_PERIOD_GAP_DAYS) return undefined;
+      const candidates = history.filter((point) => point.reportPeriod === earlierPeriod);
+      const purest = Math.max(...candidates.map((point) => point.reportPeriodShare ?? 0));
+      return [...candidates].reverse().find((point) => (point.reportPeriodShare ?? 0) > purest - PERIOD_SHARE_TOLERANCE);
+    }
   }
   const latestDay = dayNumber(latest.asOf);
   return [...history].reverse().find((point) => {
@@ -70,6 +97,10 @@ function findPreviousReport(history: HistoricalObservation[], latest: Historical
 function isStale(asOf: string, visibleAt: string | undefined, evaluationDate: string, config: ScoringConfig): boolean {
   const visible = visibleAt && visibleAt.slice(0, 10) > asOf.slice(0, 10) ? visibleAt : asOf;
   return dayNumber(evaluationDate) - dayNumber(visible) > config.history.maxObservationAgeDays;
+}
+
+function toPoint(point: HistoricalObservation): HealthCheckPoint {
+  return { value: round2(point.value), asOf: point.asOf, ...(point.reportPeriod ? { reportPeriod: point.reportPeriod } : {}) };
 }
 
 /**
@@ -88,13 +119,13 @@ function consecutiveNegative(
   const history = series?.history ?? [];
   const latestPoint = history.at(-1);
   if (!latestPoint) return { ...base, status: "MISSING", note: "没有财报汇总数据" };
-  const latest = { value: round2(latestPoint.value), asOf: latestPoint.asOf };
+  const latest = toPoint(latestPoint);
   if (isStale(latestPoint.asOf, latestPoint.availableAt, evaluationDate, config)) {
     return { ...base, latest, status: "MISSING", note: `最新数据超过 ${config.history.maxObservationAgeDays} 天未更新` };
   }
   const previousPoint = findPreviousReport(history, latestPoint, config);
   if (!previousPoint) return { ...base, latest, status: "MISSING", note: "缺少上一期（约一个季度前）的对照值" };
-  const previous = { value: round2(previousPoint.value), asOf: previousPoint.asOf };
+  const previous = toPoint(previousPoint);
   return { ...base, latest, previous, status: latest.value < 0 && previous.value < 0 ? "BREACH" : "OK" };
 }
 
@@ -146,7 +177,7 @@ function checksFor(input: AssetModelInput, config: ScoringConfig): HealthCheckRe
 function describeCheck(check: HealthCheckResult): string {
   const points = [check.latest, check.previous]
     .filter((point): point is HealthCheckPoint => point !== null)
-    .map((point) => `${point.value} @ ${point.asOf}`)
+    .map(formatHealthPoint)
     .join("，");
   return `${check.label}${check.rule}${points ? `（${points}）` : ""}`;
 }

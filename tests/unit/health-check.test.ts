@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assessFundamentalHealth, calculateAssetScore } from "@/domain/scoring";
+import { assessFundamentalHealth, calculateAssetScore, formatHealthPoint, reportPeriodLabel } from "@/domain/scoring";
 import type { AssetModelInput, MetricSeries, TechGrowthInput, ValueDividendInput } from "@/domain/scoring/types";
 
 /** 基本面体检 v2（docs/hengcang_v2_allocation_fundamentals_thesis.md §3）。 */
@@ -143,7 +143,7 @@ describe("上一期按报告期找（复查发现：三季报季拿三季报去�
   it("三季报与半年报都为负 → 恶化（按日期间隔会拿到 8/12 的一季报而误判正常）", () => {
     const health = assessFundamentalHealth(tech(calendar(5, -8, -10), quarterly([["2026-07-15", 2], ["2026-10-20", 3]])));
     expect(health.status).toBe("DETERIORATING");
-    expect(health.checks.find((item) => item.key === "earningsGrowth")?.previous).toEqual({ value: -8, asOf: "2026-10-10" });
+    expect(health.checks.find((item) => item.key === "earningsGrowth")?.previous).toEqual({ value: -8, asOf: "2026-10-10", reportPeriod: "2026-06-30" });
   });
 
   it("半年报为正、三季报为负 → 只有一期为负，不算恶化（按日期间隔会拿到一季报而误判恶化）", () => {
@@ -155,6 +155,62 @@ describe("上一期按报告期找（复查发现：三季报季拿三季报去�
     const series = periodic([["2026-03-20", -5, "2025-09-30"], ["2026-10-24", -10, "2026-09-30"]]);
     const check = assessFundamentalHealth(tech(series, quarterly([["2026-07-15", 2], ["2026-10-20", 3]]))).checks.find((item) => item.key === "earningsGrowth");
     expect(check?.status).toBe("MISSING");
+  });
+
+  /** 带占比的点：[asOf, value, 主导报告期, 占比] */
+  function shared(points: Array<[string, number, string, number | undefined]>): MetricSeries {
+    const series = periodic(points.map(([asOf, value, period]) => [asOf, value, period]));
+    return { ...series, history: series.history.map((point, index) => (points[index][3] === undefined ? point : { ...point, reportPeriodShare: points[index][3] })) };
+  }
+  const revenueOk = quarterly([["2026-07-15", 2], ["2026-10-20", 3]]);
+
+  it("财报季里取上一期最「纯」的点，不取紧挨着最新点、已混进大半新财报的那天（2026-10-30 真实数据复查）", () => {
+    const series = shared([
+      ["2026-08-31", 26, "2026-06-30", 0.97],
+      ["2026-10-09", 26.17, "2026-06-30", 1],
+      ["2026-10-23", 18.18, "2026-06-30", 0.52],
+      ["2026-10-24", 13.36, "2026-09-30", 0.6],
+    ]);
+    const check = assessFundamentalHealth(tech(series, revenueOk)).checks.find((item) => item.key === "earningsGrowth");
+    expect(check?.previous).toEqual({ value: 26.17, asOf: "2026-10-09", reportPeriod: "2026-06-30" });
+  });
+
+  it("半年报为正、三季报为负：混进三季报后转负的那天不算「上一期也为负」", () => {
+    // 按旧取法上一期是 10-23 的 −2（半年报只剩 52% 权重），会把一期为负误判成连续两期为负
+    const series = shared([
+      ["2026-10-09", 3, "2026-06-30", 1],
+      ["2026-10-23", -2, "2026-06-30", 0.52],
+      ["2026-10-24", -5, "2026-09-30", 0.6],
+    ]);
+    const health = assessFundamentalHealth(tech(series, revenueOk));
+    expect(health.checks.find((item) => item.key === "earningsGrowth")).toMatchObject({ status: "OK", previous: { value: 3, asOf: "2026-10-09" } });
+    expect(health.status).toBe("HEALTHY");
+  });
+
+  it("占比相差不到 2 个百分点算一样纯，取较新的（权重名单更新）；没有占比的旧点让位给有占比的", () => {
+    const previousOf = (series: MetricSeries) => assessFundamentalHealth(tech(series, revenueOk)).checks.find((item) => item.key === "earningsGrowth")?.previous?.asOf;
+    expect(previousOf(shared([
+      ["2026-09-01", 20, "2026-06-30", undefined],
+      ["2026-09-15", 21, "2026-06-30", 1],
+      ["2026-10-12", 22, "2026-06-30", 0.99],
+      ["2026-10-20", 18, "2026-06-30", 0.6],
+      ["2026-10-24", 15, "2026-09-30", 0.7],
+    ]))).toBe("2026-10-12");
+    expect(previousOf(shared([
+      ["2026-09-15", 21, "2026-06-30", 1],
+      ["2026-10-12", 22, "2026-06-30", 0.97],
+      ["2026-10-20", 18, "2026-06-30", 0.6],
+      ["2026-10-24", 15, "2026-09-30", 0.7],
+    ]))).toBe("2026-09-15");
+  });
+
+  it("明细和原因里标出每个点以哪一期财报为主", () => {
+    expect(reportPeriodLabel("2026-06-30")).toBe("2026 半年报");
+    expect(reportPeriodLabel("2025-12-31")).toBe("2025 年报");
+    expect(formatHealthPoint({ value: -10, asOf: "2026-10-24", reportPeriod: "2026-09-30" })).toBe("-10 @ 2026-10-24（2026 三季报为主）");
+    expect(formatHealthPoint({ value: -10, asOf: "2026-10-24" })).toBe("-10 @ 2026-10-24");
+    const health = assessFundamentalHealth(tech(calendar(5, -8, -10), revenueOk));
+    expect(health.reasons[0]).toContain("-10 @ 2026-10-24（2026 三季报为主），-8 @ 2026-10-10（2026 半年报为主）");
   });
 
   it("旧数据没有报告期时退回按日期间隔（约一个季度前）", () => {

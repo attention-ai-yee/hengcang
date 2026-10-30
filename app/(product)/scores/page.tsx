@@ -3,7 +3,7 @@ import { ManualScoreForm } from "@/components/manual-score-form";
 import { AutomaticDataRefresh } from "@/components/automatic-data-refresh";
 import { ScoreColorLegend, ScoreExplanationTooltip } from "@/components/score-explanation-tooltip";
 import { listLatestScores } from "@/db/queries";
-import { DEFAULT_SCORING_CONFIG } from "@/domain/scoring";
+import { DEFAULT_SCORING_CONFIG, reportPeriodLabel, type HealthCheckPoint } from "@/domain/scoring";
 import type { AssetBucket, RecommendationState } from "@/domain/types";
 import { BUCKET_LABELS, CONFIDENCE_LABELS, FUNDAMENTAL_HEALTH_LABELS, HEALTH_CHECK_STATUS_LABELS, STATE_LABELS } from "@/lib/presentation";
 import { readFundamentalHealth } from "@/lib/score-details";
@@ -109,8 +109,8 @@ export default async function ScoresPage() {
                   <div className="mt-4 overflow-x-auto">
                     <p className="mb-2 font-semibold text-[#27342e]">基本面体检明细</p>
                     <table className="data-table min-w-[560px]">
-                      <thead><tr><th>检查项</th><th>触发条件</th><th>结果</th><th>最新</th><th>约一个季度前</th><th>说明</th></tr></thead>
-                      <tbody>{health.checks.map((check) => <tr key={check.key}><td>{check.label}</td><td>{check.rule}</td><td>{HEALTH_CHECK_STATUS_LABELS[check.status] ?? check.status}</td><td>{check.latest ? `${check.latest.value} @ ${check.latest.asOf}` : "—"}</td><td>{check.previous ? `${check.previous.value} @ ${check.previous.asOf}` : "—"}</td><td>{check.note ?? ""}</td></tr>)}</tbody>
+                      <thead><tr><th>检查项</th><th>触发条件</th><th>结果</th><th>最新</th><th>上一期</th><th>说明</th></tr></thead>
+                      <tbody>{health.checks.map((check) => <tr key={check.key}><td>{check.label}</td><td>{check.rule}</td><td>{HEALTH_CHECK_STATUS_LABELS[check.status] ?? check.status}</td><td><HealthPoint point={check.latest} /></td><td><HealthPoint point={check.previous} /></td><td>{check.note ?? ""}</td></tr>)}</tbody>
                     </table>
                   </div>
                 )}
@@ -175,6 +175,16 @@ function parseDetails(json: string): { note: string; components: DetailComponent
   } catch {
     return { note: "评分明细格式无法解析", components: [], reasons: [], candidateState: null, stateConfirmed: true };
   }
+}
+
+/** 体检明细里的一个点：值一行，日期和以哪期财报为主各一行小字（卡片窄，挤在一行会折成好几行） */
+function HealthPoint({ point }: { point: HealthCheckPoint | null }) {
+  if (!point) return "—";
+  return <>
+    <span className="font-semibold">{point.value}</span>
+    <span className="block whitespace-nowrap text-xs text-[#748078]">{point.asOf}</span>
+    {point.reportPeriod && <span className="block whitespace-nowrap text-xs text-[#748078]">{reportPeriodLabel(point.reportPeriod)}为主</span>}
+  </>;
 }
 
 function showValue(value: number | null, suffix = "") {

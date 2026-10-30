@@ -9,6 +9,8 @@ export interface HistoricalObservation {
   quality?: "VALID" | "PARTIAL";
   /** 财报类桶级汇总按权重占主导的报告期；旧数据或非财报指标没有 */
   reportPeriod?: string;
+  /** 主导报告期占有效权重的比例（0–1）；2026-10-30 之前写入的汇总没有 */
+  reportPeriodShare?: number;
 }
 
 export interface MetricSeries {

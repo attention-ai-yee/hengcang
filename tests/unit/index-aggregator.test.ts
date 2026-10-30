@@ -54,6 +54,25 @@ describe("增长率按加权中位数汇总（2026-10-30 真实数据复查）",
     const result = aggregateFundamentalMetric("EARNINGS_GROWTH", weights, [report("A", -8), report("B", -5), report("C", 1500), report("D", 3)], "2026-10-30");
     expect(result.value).toBe(-5);
     expect(result.reportPeriod).toBe("2026-09-30");
+    expect(result.reportPeriodShare).toBe(1);
+  });
+
+  it("同一天发了年报和一季报：不论数据顺序都取一季报（2026-10-30 离线重算复查）", () => {
+    const weights = [{ indexSymbol: "X", effectiveDate: "2026-03-31", constituentSymbol: "A", weight: 1 }];
+    const annual = { symbol: "A", reportPeriod: "2025-12-31", availableAt: "2026-04-30T08:00:00+08:00", roe: 10, earningsGrowth: 6, revenueGrowth: 6 };
+    const firstQuarter = { ...annual, reportPeriod: "2026-03-31", earningsGrowth: 30, revenueGrowth: 30 };
+    for (const reports of [[annual, firstQuarter], [firstQuarter, annual]]) {
+      const result = aggregateFundamentalMetric("EARNINGS_GROWTH", weights, reports, "2026-05-10");
+      expect(result).toMatchObject({ value: 30, reportPeriod: "2026-03-31" });
+    }
+  });
+
+  it("财报季里记下主导报告期占有效权重的比例（体检据此挑「纯」的上一期）", () => {
+    const weights = ["A", "B", "C", "D"].map((symbol, index) => ({ indexSymbol: "X", effectiveDate: "2026-09-30", constituentSymbol: symbol, weight: [0.3, 0.3, 0.2, 0.2][index] }));
+    const report = (symbol: string, reportPeriod: string) => ({ symbol, reportPeriod, availableAt: "2026-10-25T08:00:00+08:00", roe: 10, earningsGrowth: 5, revenueGrowth: 5 });
+    const result = aggregateFundamentalMetric("EARNINGS_GROWTH", weights, [report("A", "2026-09-30"), report("B", "2026-06-30"), report("C", "2026-09-30"), report("D", "2026-06-30")], "2026-10-30");
+    expect(result.reportPeriod).toBe("2026-09-30");
+    expect(result.reportPeriodShare).toBe(0.5);
   });
 });
 

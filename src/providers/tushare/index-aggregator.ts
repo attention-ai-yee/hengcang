@@ -30,6 +30,8 @@ export interface AggregateMetricResult {
   value: number | null;
   /** 财报类汇总：按权重占主导的报告期（YYYY-MM-DD）。体检据此找「上一期」，见 health-check.ts */
   reportPeriod?: string;
+  /** 主导报告期占有效权重的比例（0–1，保留 4 位）。财报季里新旧两期混在一起时低于 1 */
+  reportPeriodShare?: number;
   constituentCoverage: number;
   constituentCount: number;
   validConstituentCount: number;
@@ -133,7 +135,11 @@ export function aggregateFundamentalMetric(
   for (const row of fundamentals) {
     if (row.availableAt.slice(0, 10) > evaluationDate) continue;
     const existing = latestBySymbol.get(row.symbol);
-    if (!existing || row.availableAt > existing.availableAt) latestBySymbol.set(row.symbol, row);
+    // 同一天发两份（年报和一季报常在 4 月底一起发）取报告期新的那份。之前取先读到的那份：
+    // 2026-10-30 离线重算时长江电力取成了 2025 年报，它的权重正好在中位数上，上证50 盈利同比从 +28.74% 变成 +6.17%
+    if (!existing || row.availableAt > existing.availableAt || (row.availableAt === existing.availableAt && row.reportPeriod > existing.reportPeriod)) {
+      latestBySymbol.set(row.symbol, row);
+    }
   }
   const { totalWeight, weights: validWeights } = activeWeights(weights);
   const field = metricKey === "ROE" ? "roe" : metricKey === "REVENUE_GROWTH" ? "revenueGrowth" : "earningsGrowth";
@@ -145,8 +151,8 @@ export function aggregateFundamentalMetric(
   // 各成分股最新财报的报告期不一样（财报季里有人已出三季报、有人还是半年报）：取权重最大的那一期，平手取较新的
   const weightByPeriod = new Map<string, number>();
   for (const row of usable) weightByPeriod.set(row.reportPeriod, (weightByPeriod.get(row.reportPeriod) ?? 0) + row.weight);
-  const reportPeriod = [...weightByPeriod.entries()]
-    .sort((left, right) => right[1] - left[1] || right[0].localeCompare(left[0]))[0]?.[0];
+  const [reportPeriod, periodWeight] = [...weightByPeriod.entries()]
+    .sort((left, right) => right[1] - left[1] || right[0].localeCompare(left[0]))[0] ?? [];
   const validWeight = usable.reduce((sum, row) => sum + row.weight, 0);
   const coverage = totalWeight > 0 ? validWeight / totalWeight : 0;
   const quality = qualityFor(coverage);
@@ -160,7 +166,9 @@ export function aggregateFundamentalMetric(
   return {
     metricKey,
     value: quality && validWeight > 0 ? aggregate : null,
-    ...(reportPeriod ? { reportPeriod } : {}),
+    ...(reportPeriod && periodWeight !== undefined && validWeight > 0
+      ? { reportPeriod, reportPeriodShare: Math.round((periodWeight / validWeight) * 10_000) / 10_000 }
+      : {}),
     constituentCoverage: coverage,
     constituentCount: validWeights.length,
     validConstituentCount: usable.length,

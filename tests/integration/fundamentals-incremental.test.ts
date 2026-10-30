@@ -52,7 +52,10 @@ const fakeProvider = {
 function bucketGrowthRows(rows: ProviderMetricObservationInput[], metricKey: string) {
   return rows
     .filter((row) => row.subjectType === "ASSET_BUCKET" && row.metricKey === metricKey)
-    .map((row) => ({ asOf: row.asOf, value: Number(row.value), reportPeriod: (JSON.parse(row.metadataJson ?? "{}") as { reportPeriod?: string }).reportPeriod }))
+    .map((row) => {
+      const { reportPeriod, reportPeriodShare } = JSON.parse(row.metadataJson ?? "{}") as { reportPeriod?: string; reportPeriodShare?: number };
+      return { asOf: row.asOf, value: Number(row.value), reportPeriod, reportPeriodShare };
+    })
     .sort((first, second) => first.asOf.localeCompare(second.asOf));
 }
 
@@ -84,10 +87,10 @@ describe("refreshFundamentals 增量模式", () => {
     const warnings: string[] = [];
     const rows = await refreshFundamentals(fakeProvider, [TECH_PROXY], "2026-10-25", { start: "2025-07-25", end: "2026-10-25" }, "INCREMENTAL", warnings, FETCHED_AT);
     expect(bucketGrowthRows(rows, "EARNINGS_GROWTH")).toEqual([
-      { asOf: "2026-08-15", value: -5, reportPeriod: "2026-06-30" }, // A 半年报 −20、B 一季报 +10（权重相同取较新的报告期）
-      { asOf: "2026-08-28", value: -10, reportPeriod: "2026-06-30" }, // A 半年报 −20、B 半年报 0
-      { asOf: "2026-10-15", value: -15, reportPeriod: "2026-09-30" }, // A 三季报 −30、B 仍是半年报 0
-      { asOf: "2026-10-20", value: -20, reportPeriod: "2026-09-30" }, // A −30、B 三季报 −10
+      { asOf: "2026-08-15", value: -5, reportPeriod: "2026-06-30", reportPeriodShare: 0.5 }, // A 半年报 −20、B 一季报 +10（权重相同取较新的报告期）
+      { asOf: "2026-08-28", value: -10, reportPeriod: "2026-06-30", reportPeriodShare: 1 }, // A 半年报 −20、B 半年报 0
+      { asOf: "2026-10-15", value: -15, reportPeriod: "2026-09-30", reportPeriodShare: 0.5 }, // A 三季报 −30、B 仍是半年报 0
+      { asOf: "2026-10-20", value: -20, reportPeriod: "2026-09-30", reportPeriodShare: 1 }, // A −30、B 三季报 −10
     ]);
     expect(bucketGrowthRows(rows, "REVENUE_GROWTH").map((row) => row.asOf)).toEqual(["2026-08-15", "2026-08-28", "2026-10-15", "2026-10-20"]);
     // 个股层面的财报全部入库（幂等 upsert），供以后按持仓做体检

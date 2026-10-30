@@ -33,7 +33,7 @@ pnpm data:refresh
 
 `pnpm worker` 为常驻进程，每 30 分钟检查一次：距上次成功刷新满 6 小时就刷新（按墙钟时间判断，笔记本休眠、重启都不影响；失败后隔 1 小时再试），并做每天一次的 AI 新闻扫描。服务端（`app/api/data/refresh`）与页面按钮（同源 server action）共用同一条刷新链路，页面上刷新过的 worker 不会再重复刷。
 
-同一报告期发生修订时，数据库以 `observed_at + available_at` 存储多个版本。评分和回测只选择 `available_at <= evaluationDate` 的最后一个版本，避免未来数据泄漏；回测取 `PRICE_CLOSE` 时同样按 `available_at` 过滤，并对同一 `as_of` 的多个来源按「手工覆盖 > 主 Provider > VALID > 最新 available_at/fetched_at」确定性选行，同时统计“顺延前值”的评估区间。
+同一报告期发生修订时，数据库以 `observed_at + available_at` 存储多个版本。Tushare 对同一报告期、同一公告日返回修正前后两条（`update_flag` 为 0 / 1）时，只保留修正后的那条；同一家公司同一天发了两份财报（如年报和一季报），桶级汇总取报告期新的那份。评分和回测只选择 `available_at <= evaluationDate` 的最后一个版本，避免未来数据泄漏；回测取 `PRICE_CLOSE` 时同样按 `available_at` 过滤，并对同一 `as_of` 的多个来源按「手工覆盖 > 主 Provider > VALID > 最新 available_at/fetched_at」确定性选行，同时统计“顺延前值”的评估区间。
 
 ## 降级规则
 

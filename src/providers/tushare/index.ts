@@ -244,15 +244,28 @@ export class TushareProvider implements MarketDataProvider {
   }
 
   async getEquityFundamentals(symbol: string, range: { start: string; end: string }): Promise<ProviderResult<EquityFundamentalSnapshot[]>> {
-    return this.rows("fina_indicator", { ts_code: symbol, start_date: compactDate(range.start), end_date: compactDate(range.end) }, "ts_code,ann_date,end_date,roe,netprofit_yoy,tr_yoy,or_yoy,q_sales_yoy,update_flag", (row) => {
+    const result = await this.rows("fina_indicator", { ts_code: symbol, start_date: compactDate(range.start), end_date: compactDate(range.end) }, "ts_code,ann_date,end_date,roe,netprofit_yoy,tr_yoy,or_yoy,q_sales_yoy,update_flag", (row) => {
       const reportPeriod = dayFromTushare(row.end_date);
       const announced = dayFromTushare(row.ann_date ?? row.end_date);
       if (reportPeriod.length !== 10 || announced.length !== 10) return [];
       return [{
-        symbol: String(row.ts_code ?? symbol), reportPeriod, availableAt: `${announced}T08:00:00+08:00`, roe: numericOrNull(row.roe),
-        earningsGrowth: numericOrNull(row.netprofit_yoy), revenueGrowth: numericOrNull(row.tr_yoy),
+        snapshot: {
+          symbol: String(row.ts_code ?? symbol), reportPeriod, availableAt: `${announced}T08:00:00+08:00`, roe: numericOrNull(row.roe),
+          earningsGrowth: numericOrNull(row.netprofit_yoy), revenueGrowth: numericOrNull(row.tr_yoy),
+        },
+        revised: String(row.update_flag ?? "") === "1",
       }];
     });
+    if (!result.ok) return result;
+    // 同一报告期、同一公告日返回多条 = 财报修正过：update_flag 为 1 的是修正后的，0 是修正前的。
+    // 之前两条都留着，汇总取先读到的、入库留后写的，结果取决于返回顺序。
+    const byReport = new Map<string, { snapshot: EquityFundamentalSnapshot; revised: boolean }>();
+    for (const item of result.data) {
+      const key = `${item.snapshot.reportPeriod}|${item.snapshot.availableAt}`;
+      const existing = byReport.get(key);
+      if (!existing || (item.revised && !existing.revised)) byReport.set(key, item);
+    }
+    return { ...result, data: [...byReport.values()].map((item) => item.snapshot) };
   }
 
   async getEquityDividendHistory(symbol: string): Promise<ProviderResult<TushareDividendRecord[]>> {

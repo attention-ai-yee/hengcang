@@ -233,8 +233,13 @@ describe("决策日志纵切", () => {
     expect(singlePrint[0].result.fundamentalHealth.status).toBe("HEALTHY");
     expect(singlePrint[0].result.state).toBe("STRONG_ADD_ALLOWED");
 
-    // 约一个季度前（06-01，汇总口径为主数据源，优先于种子行）也为负 → 体检不通过（REASSESS_THESIS 即时态）。
-    insertMetric({ subjectId: "BROAD_EQUITY", metricKey: "INDEX_EARNINGS_GROWTH", value: "-20", unit: "percent", asOf: "2026-06-01", provider: "tushare-index-aggregate" });
+    // 约一个季度前（06-01）也为负 → 体检不通过（REASSESS_THESIS 即时态）。一条序列只用一个来源，
+    // 所以改的是同一来源（种子行）的那一天，而不是另插一行别的来源去拼。
+    getDatabase().update(metricObservations).set({ value: "-20" }).where(and(
+      eq(metricObservations.subjectId, "BROAD_EQUITY"),
+      eq(metricObservations.metricKey, "INDEX_EARNINGS_GROWTH"),
+      eq(metricObservations.asOf, "2026-06-01"),
+    )).run();
     const first = await refreshScoresForBuckets([{ bucket: "BROAD_EQUITY", asOf: "2026-08-23" }]);
     expect(first[0].result.fundamentalHealth.status).toBe("DETERIORATING");
     expect(first[0].result.reasons[0]).toContain("指数盈利同比");

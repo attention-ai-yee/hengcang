@@ -15,7 +15,9 @@ export function scoreDividendStability(records: TushareDividendRecord[], evaluat
   const years = Array.from({ length: 5 }, (_, index) => currentYear - 1 - index).reverse();
   const dividends = years.map((year) => paidByYear.get(year) ?? 0);
   const paidYears = dividends.filter((value) => value > 0).length;
-  if (paidYears === 0) return null;
+  // 5 年一次现金分红都没有：有分红记录（如「不分配」预案）就按规格给 30 − 20 = 10 分；原来直接剔除，
+  // 长期不分红的公司不计入，指数的分红稳定性偏高、会掩盖恶化（2026-10-31 复查）。完全没有记录（新股、缺数据）才不算。
+  if (paidYears === 0) return records.length > 0 ? 10 : null;
   let score = paidYears === 5 ? 80 : paidYears === 4 ? 65 : paidYears === 3 ? 50 : 30;
   if (paidYears === 5) score += 10;
   if (dividends.at(-1)! > 0) score += 5;

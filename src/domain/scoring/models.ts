@@ -131,7 +131,7 @@ export function calculateTrend(input: TrendModelInput, asOf: string): SubscoreRe
       quality: input.ma60.quality,
       coverage: input.ma60.coverage,
     },
-    momentum6m: scoreHistoricalMetric(input.momentum6m, weights.momentum6m, "HIGHER_IS_BETTER", asOf),
+    momentum6m: scoreHistoricalMetric(input.momentum6m, weights.momentum6m, "HIGHER_IS_BETTER", asOf, "ALL"),
   });
 }
 
@@ -215,9 +215,9 @@ function isMetricSeries(value: GoldInput["centralBankDemand"]): value is MetricS
 function calculateGold(input: GoldInput) {
   const weights = DEFAULT_SCORING_CONFIG.componentWeights.GOLD;
   const cheapness = combineComponents({
-    longTermPricePosition: scoreHistoricalMetric(input.pricePosition, weights.cheapness.longTermPricePosition, "LOWER_IS_BETTER", input.asOf),
-    distanceFromMa200: scoreHistoricalMetric(input.distanceFromMa200, weights.cheapness.distanceFromMa200, "LOWER_IS_BETTER", input.asOf),
-    momentumCrowding: scoreHistoricalMetric(input.momentum3m, weights.cheapness.momentumCrowding, "LOWER_IS_BETTER", input.asOf),
+    longTermPricePosition: scoreHistoricalMetric(input.pricePosition, weights.cheapness.longTermPricePosition, "LOWER_IS_BETTER", input.asOf, "ALL"),
+    distanceFromMa200: scoreHistoricalMetric(input.distanceFromMa200, weights.cheapness.distanceFromMa200, "LOWER_IS_BETTER", input.asOf, "ALL"),
+    momentumCrowding: scoreHistoricalMetric(input.momentum3m, weights.cheapness.momentumCrowding, "LOWER_IS_BETTER", input.asOf, "ALL"),
   });
   // 黄金 v1.2（docs/hengcang_gold_model_revision_v1_2.md §6/§16）：
   // 宏观支持度 = 水平项(实际利率 25% + 美元 20%) + 边际变化项(各 15%/10%) + 资金面(ETF 流 15% + 央行购金 15%)。

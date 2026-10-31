@@ -18,4 +18,10 @@ describe("scoreDividendStability", () => {
   it("div_proc 缺失的旧数据退回看派息日", () => {
     expect(scoreDividendStability([2021, 2022, 2023, 2024, 2025].map((year) => record(year, null)), "2026-10-28")).toBe(95);
   });
+
+  it("5 年一次现金分红都没有：有记录就按规格得 10 分（原来剔除，指数分红稳定性偏高）；完全没记录才不算", () => {
+    const neverPaid = [2021, 2022, 2023, 2024, 2025].map((year) => ({ ...record(year, "实施"), cashDividend: 0 }));
+    expect(scoreDividendStability(neverPaid, "2026-10-28")).toBe(10);
+    expect(scoreDividendStability([], "2026-10-28")).toBeNull();
+  });
 });

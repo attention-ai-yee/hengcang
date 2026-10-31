@@ -13,7 +13,7 @@ const EVAL_DATE = "2026-08-23";
 function metric(value: number): MetricSeries {
   return {
     currentValue: value,
-    history: [{ value, asOf: "2020-01-01", availableAt: "2020-01-01T00:00:00Z", quality: "VALID" }],
+    history: [{ value, asOf: "2023-01-01", availableAt: "2023-01-01T00:00:00Z", quality: "VALID" }],
     source: "tushare-index-aggregate",
     asOf: EVAL_DATE,
     availableAt: EVAL_DATE + "T00:00:00Z",
@@ -25,8 +25,8 @@ function metric(value: number): MetricSeries {
 function series(values: number[]): MetricSeries {
   const history = values.map((value, index) => ({
     value,
-    asOf: `202${index}-01-01`,
-    availableAt: `202${index}-01-01T00:00:00Z`,
+    asOf: `202${index + 3}-01-01`,
+    availableAt: `202${index + 3}-01-01T00:00:00Z`,
     quality: "VALID" as const,
   }));
   const latest = history[history.length - 1];
@@ -49,8 +49,8 @@ function midPercentile(value: number, low: number, high: number): MetricSeries {
   return {
     ...metric(value),
     history: [
-      { value: low, asOf: "2019-01-01", availableAt: "2019-01-01T00:00:00Z", quality: "VALID" },
-      { value: high, asOf: "2020-01-01", availableAt: "2020-01-01T00:00:00Z", quality: "VALID" },
+      { value: low, asOf: "2022-01-01", availableAt: "2022-01-01T00:00:00Z", quality: "VALID" },
+      { value: high, asOf: "2023-01-01", availableAt: "2023-01-01T00:00:00Z", quality: "VALID" },
     ],
   };
 }
@@ -85,7 +85,7 @@ const presentTrend: AssetModelInput["trend"] = {
   momentum6m: {
     currentValue: 0.15,
     history: [
-      { value: 0.1, asOf: "2020-01-01", availableAt: "2020-01-01T00:00:00Z", quality: "VALID" },
+      { value: 0.1, asOf: "2023-01-01", availableAt: "2023-01-01T00:00:00Z", quality: "VALID" },
       { value: 0.15, asOf: EVAL_DATE, availableAt: EVAL_DATE + "T00:00:00Z", quality: "VALID" },
     ],
     source: "tushare-index-aggregate",

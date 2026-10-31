@@ -1,6 +1,7 @@
 import defaults from "./default-config.json";
 
 export interface ScoringConfig {
+  /** v7：历史分位只看近 windowYears 年、估值类按月取样、中位秩（见 percentile.ts） */
   version: number;
   /**
    * v6：配置吸引力分只由便宜程度与趋势合成；基本面改成体检（见 health-check.ts），
@@ -32,6 +33,8 @@ export interface ScoringConfig {
     highCoverage: number;
     /** 数据新鲜度上限：指标最新观察（asOf 与 availableAt 较晚者）距评估日超过该天数时，组件可信度降为 LOW（不改分数）。 */
     maxObservationAgeDays: number;
+    /** 历史分位的观察窗口（年）：只和评估日前这么多年内的历史比（规格 §3.1：5 年） */
+    windowYears: number;
   };
   portfolio: { baseCurrency: string; reservedCash: number };
   componentWeights: typeof defaults.componentWeights;
@@ -62,6 +65,9 @@ export function assertScoringConfig(config: ScoringConfig): void {
   }
   if (!(Number.isFinite(config.history.maxObservationAgeDays) && config.history.maxObservationAgeDays > 0)) {
     throw new Error("数据新鲜度阈值必须为正数");
+  }
+  if (!(Number.isInteger(config.history.windowYears) && config.history.windowYears > 0)) {
+    throw new Error("历史分位窗口必须是正整数年");
   }
 
   function validateWeightGroups(value: unknown, path: string): void {

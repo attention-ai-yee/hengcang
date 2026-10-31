@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "scoreWeights": {
     "cheapness": 0.7,
     "trend": 0.3
@@ -29,7 +29,8 @@
     "mediumYears": 1,
     "mediumCoverage": 0.6,
     "highCoverage": 0.8,
-    "maxObservationAgeDays": 180
+    "maxObservationAgeDays": 180,
+    "windowYears": 5
   },
   "portfolio": {
     "baseCurrency": "CNY",

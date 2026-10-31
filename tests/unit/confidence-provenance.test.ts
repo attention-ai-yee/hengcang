@@ -5,15 +5,22 @@ import type { AssetModelInput, MetricSeries, TrendModelInput } from "@/domain/sc
 
 const AS_OF = "2026-08-21";
 
-function ascending(source: string): MetricSeries {
-  const values = Array.from({ length: 26 }, (_, i) => 1 + i * 0.06);
-  const history = values.map((value, i) => ({
-    value,
-    asOf: "2020-0" + ((i % 9) + 1) + "-15",
-    availableAt: "2020-0" + ((i % 9) + 1) + "-15T18:00:00+08:00",
-    quality: "VALID" as const,
-  }));
+function monthly(values: number[], source: string): MetricSeries {
+  const history = values.map((value, i) => {
+    const day = `${2023 + Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}-15`;
+    return { value, asOf: day, availableAt: `${day}T18:00:00+08:00`, quality: "VALID" as const };
+  });
   return { currentValue: values[values.length - 1], history, source, asOf: AS_OF, quality: "VALID", coverage: 1 };
+}
+
+/** 2023-01 到 2026-08 每月一点、加速上升：当前值和最近三个月的变化都是窗口内最高 */
+function ascending(source: string): MetricSeries {
+  return monthly(Array.from({ length: 44 }, (_, i) => 1 + i * i * 0.002), source);
+}
+
+/** 加速下降：当前值是窗口内最低（如 ETF 资金持续流出） */
+function descending(source: string): MetricSeries {
+  return monthly(Array.from({ length: 44 }, (_, i) => 5 - i * i * 0.002), source);
 }
 
 function flat(value: number, source: string): MetricSeries {
@@ -38,7 +45,7 @@ function goldInput(): AssetModelInput {
     momentum3m: flat(-0.02, "DERIVED:MOMENTUM_3M:tushare"),
     realYield: ascending("fred"),
     dollarIndex: ascending("fred"),
-    etfFlow: (() => { const s = ascending("tushare-gold-etf-proxy"); s.quality = "PARTIAL"; return s; })(),
+    etfFlow: (() => { const s = descending("tushare-gold-etf-proxy"); s.quality = "PARTIAL"; return s; })(),
     centralBankDemand: flat(5, "tushare"),
   };
 }

@@ -40,7 +40,19 @@ describe("置信度年限与来源边界（H4/M11/溯源）", () => {
 
   it("恰好与超过 3 个完整日历年的干净 VALID 序列可达 HIGH", () => {
     expect(confidenceFor(seriesFrom("2023-08-23"))).toBe("HIGH");
-    expect(confidenceFor(seriesFrom("2019-08-23"))).toBe("HIGH");
+    expect(confidenceFor(seriesFrom("2021-08-24"))).toBe("HIGH");
+  });
+
+  it("5 年窗口外的历史不参与分位，也不算进年限（规格 §3.1）", () => {
+    // 正好 5 年前及更早的点都在窗口外：只剩当前一点，分位无意义、可信度 LOW
+    expect(confidenceFor(seriesFrom("2021-08-23"))).toBe("LOW");
+    expect(confidenceFor(seriesFrom("2019-08-23"))).toBe("LOW");
+    const withAncientLow = { ...seriesFrom("2023-08-23"), history: [
+      { value: -100, asOf: "2018-01-15", availableAt: "2018-01-15T18:00:00+08:00", quality: "VALID" as const },
+      ...seriesFrom("2023-08-23").history,
+    ] };
+    expect(scoreHistoricalMetric(withAncientLow, 1, "HIGHER_IS_BETTER", EVAL_DATE).percentile)
+      .toBe(scoreHistoricalMetric(seriesFrom("2023-08-23"), 1, "HIGHER_IS_BETTER", EVAL_DATE).percentile);
   });
 
   it("差一天不足 3 年（只有 2 个完整年）保持 MEDIUM", () => {
@@ -54,31 +66,31 @@ describe("置信度年限与来源边界（H4/M11/溯源）", () => {
   });
 
   it("PARTIAL 封顶 MEDIUM；manual 恒为 LOW", () => {
-    const fiveYearSeries = seriesFrom("2021-08-23");
+    const fiveYearSeries = seriesFrom("2021-08-24");
     expect(confidenceFor({ ...fiveYearSeries, quality: "PARTIAL" })).toBe("MEDIUM");
     expect(confidenceFor({ ...fiveYearSeries, source: "manual" })).toBe("LOW");
   });
 
   it("价格技术特征继承主源：DERIVED:<特征>:tushare 可达 HIGH", () => {
-    const fiveYearSeries = seriesFrom("2021-08-23");
+    const fiveYearSeries = seriesFrom("2021-08-24");
     expect(confidenceFor({ ...fiveYearSeries, source: "DERIVED:MOMENTUM_6M:tushare" })).toBe("HIGH");
     expect(confidenceFor({ ...fiveYearSeries, source: "DERIVED:MA60:tushare" })).toBe("HIGH");
   });
 
   it("基本面估计代理（tushare-derived*）无论多久封顶 MEDIUM", () => {
-    const fiveYearSeries = seriesFrom("2021-08-23");
+    const fiveYearSeries = seriesFrom("2021-08-24");
     expect(confidenceFor({ ...fiveYearSeries, source: "tushare-derived" })).toBe("MEDIUM");
     expect(confidenceFor({ ...fiveYearSeries, source: "tushare-derived-forward-pe" })).toBe("MEDIUM");
     expect(confidenceFor({ ...fiveYearSeries, source: "DERIVED:MOMENTUM_6M:tushare-derived" })).toBe("MEDIUM");
   });
 
   it("历史早期的 PARTIAL 行不再永久封顶：当前 VALID 且 >=3 年可达 HIGH（规格 v1.1 §42 字面语义）", () => {
-    const series = seriesFrom("2021-08-23");
+    const series = seriesFrom("2021-08-24");
     const withOldPartial = {
       ...series,
       quality: "VALID" as const,
       history: [
-        { value: 1, asOf: "2021-08-23", availableAt: "2021-08-23T18:00:00+08:00", quality: "PARTIAL" as const },
+        { value: 1, asOf: "2021-08-24", availableAt: "2021-08-24T18:00:00+08:00", quality: "PARTIAL" as const },
         { value: 3, asOf: EVAL_DATE, availableAt: EVAL_DATE + "T18:00:00+08:00", quality: "VALID" as const },
       ],
     };

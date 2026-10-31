@@ -23,8 +23,9 @@ function shiftDays(date: string, days: number): string {
  * 最新观察日为 latestAsOf；availableAt 可单独指定（模拟报告期 vs 公告日）。
  */
 function seriesEndingAt(latestAsOf: string, options: { availableAt?: string } = {}): MetricSeries {
-  const history = Array.from({ length: 6 }, (_, index) => {
-    const asOf = shiftDays(latestAsOf, -(5 - index) * 365);
+  // 5 个点、相隔 300 天（跨约 3.3 年）：评估日往前推 400 天的陈旧序列也整条落在 5 年窗口内
+  const history = Array.from({ length: 5 }, (_, index) => {
+    const asOf = shiftDays(latestAsOf, -(4 - index) * 300);
     return { value: 10 + index * 2, asOf, availableAt: `${asOf}T18:00:00+08:00`, quality: "VALID" as const };
   });
   return {

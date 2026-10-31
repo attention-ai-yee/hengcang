@@ -43,7 +43,7 @@ function RunTable({ runs }: { runs: RunRow[] }) {
         <thead>
           <tr>
             <th>策略</th><th>区间</th><th>总收益</th><th>年化</th><th>最大回撤</th><th>最差年度</th>
-            <th>最长回撤期</th><th>波动率</th><th>夏普</th><th>换手(bps)</th><th>调仓桶次</th><th>完成时间</th>
+            <th>最长回撤期</th><th>波动率</th><th title="年化收益 ÷ 年化波动，没有扣无风险利率，适合在几种策略之间比较">收益/波动比</th><th>换手(bps)</th><th>调仓桶次</th><th>完成时间</th>
           </tr>
         </thead>
         <tbody>{runs.map((run) => (<tr key={run.id}>
@@ -97,7 +97,7 @@ export default async function BacktestPage() {
           <div>
             <h2 className="font-semibold">历史运行</h2>
             <p className="mt-1 text-sm text-[#68756e]">月度公共评估日网格 · 交易成本假设 {latestInputs.costBps ?? 10}bps
-              {" "}· 指标：总收益 / 年化 / 最大回撤 / 最差年度 / 最长回撤期 / 波动率 / 夏普 / 换手 / 调仓桶次</p>
+              {" "}· 指标：总收益 / 年化 / 最大回撤 / 最差年度 / 最长回撤期 / 波动率 / 收益波动比（未扣无风险利率，不是严格的夏普）/ 换手 / 调仓桶次</p>
           </div>
           <BacktestRunner />
         </div>

@@ -60,8 +60,9 @@ export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
       .all()
       .filter((row) => row.availableAt.slice(0, 10) <= request.asOf);
 
+    const seriesRows = this.consistentSource(rows, request.metricKey);
     const selected = new Map<string, (typeof rows)[number]>();
-    for (const row of rows) {
+    for (const row of seriesRows) {
       const existing = selected.get(row.asOf);
       if (!existing || this.isPreferred(row, existing, request.metricKey, request.asOf)) {
         selected.set(row.asOf, row);
@@ -87,6 +88,41 @@ export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
     return series;
   }
 
+  /**
+   * 一条序列只用一个来源（手工覆盖行除外，仍逐日覆盖）。原来逐日挑来源：同一天有官方指数估值
+   * （tushare）就用官方的，没有就用成分股汇总（tushare-index-aggregate），于是最近几个月是官方口径、
+   * 更早是汇总口径，拿当前值去比另一种口径的历史，分位会系统性偏（2026-10-31 复查）。
+   * 选法：在「最新一点不比全体最新早 10 天以上」的来源里，取历史最长的（起点按月比）；一样长取优先级高的。
+   * 官方历史还短（升级后没做全量回填）时用汇总，官方补满 5 年后自动换成官方。
+   */
+  private consistentSource<T extends typeof metricObservations.$inferSelect>(rows: T[], metricKey: CanonicalMetricKey): T[] {
+    const providerRows = rows.filter((row) => !row.isManualOverride);
+    const spans = new Map<string, { first: string; last: string }>();
+    for (const row of providerRows) {
+      const span = spans.get(row.provider);
+      if (!span) spans.set(row.provider, { first: row.asOf, last: row.asOf });
+      else {
+        if (row.asOf < span.first) span.first = row.asOf;
+        if (row.asOf > span.last) span.last = row.asOf;
+      }
+    }
+    if (spans.size <= 1) return rows;
+    const latest = [...spans.values()].reduce((max, span) => (span.last > max ? span.last : max), "");
+    const freshFrom = shiftDays(latest, -10);
+    const [chosen] = [...spans.entries()]
+      .filter(([, span]) => span.last >= freshFrom)
+      .sort(([leftProvider, left], [rightProvider, right]) =>
+        left.first.slice(0, 7).localeCompare(right.first.slice(0, 7))
+        || this.providerRank(rightProvider, metricKey) - this.providerRank(leftProvider, metricKey));
+    return rows.filter((row) => row.isManualOverride || row.provider === chosen?.[0]);
+  }
+
+  private providerRank(provider: string, metricKey: CanonicalMetricKey): number {
+    if (provider === this.policy.primaryProviderByMetric?.[metricKey]) return 1_000;
+    const fallbackIndex = this.policy.fallbackProviders?.indexOf(provider) ?? -1;
+    return fallbackIndex >= 0 ? 500 - fallbackIndex : 0;
+  }
+
   private isPreferred(
     candidate: typeof metricObservations.$inferSelect,
     existing: typeof metricObservations.$inferSelect,
@@ -107,11 +143,14 @@ export class SqliteMetricSeriesRepository implements MetricSeriesRepository {
   }
 
   private rank(row: typeof metricObservations.$inferSelect, metricKey: CanonicalMetricKey): number {
-    if (row.isManualOverride) return 10_000;
-    if (row.provider === this.policy.primaryProviderByMetric?.[metricKey]) return 1_000;
-    const fallbackIndex = this.policy.fallbackProviders?.indexOf(row.provider) ?? -1;
-    return fallbackIndex >= 0 ? 500 - fallbackIndex : 0;
+    return row.isManualOverride ? 10_000 : this.providerRank(row.provider, metricKey);
   }
+}
+
+function shiftDays(day: string, days: number): string {
+  const date = new Date(`${day.slice(0, 10)}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 export function commitManualObservations(rows: ManualObservationInput[]) {

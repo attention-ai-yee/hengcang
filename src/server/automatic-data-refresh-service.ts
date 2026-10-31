@@ -455,17 +455,22 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
   removeLegacyValidEquityRiskPremium();
   const fullBackfill = options.fullBackfill ?? (process.env.FULL_BACKFILL === "true" || Boolean(needsInitialHistory())); const range = { start: fullBackfill ? yearsBefore(end, 5) : yearsBefore(end, 1), end }; const warnings: string[] = []; const fredWarnings: string[] = []; const byBucket = new Map<ScorableAssetBucket, ProviderMetricObservationInput[]>();
   // 受控并发（Code Review M16）：provider 内部限流器负责 RPM，外层并行缩短整轮耗时。
+  // 全量回填时行情多拉一年：6 个月动量要往前看 126 个交易日、MA200 要 200 个，只拉 5 年的话
+  // 这些派生特征在 5 年窗口里只有 4.2–4.5 年的值（2026-10-31 全链路核算发现）。
+  const priceRange = fullBackfill ? { start: yearsBefore(end, 6), end } : range;
   await Promise.all(proxies.map(async (proxy) => {
-    const price = await provider.getPriceSeries({ symbol: proxy.symbol, instrumentKind: proxy.instrumentKind, range, interval: "1day" });
+    const price = await provider.getPriceSeries({ symbol: proxy.symbol, instrumentKind: proxy.instrumentKind, range: priceRange, interval: "1day" });
     const warning = providerMessage(price, `${proxy.label}行情`); if (warning) warnings.push(warning);
     if (price.ok) byBucket.set(proxy.bucket, priceRows(proxy.bucket, price));
   }));
-  const indexPrices = proxies.filter((item) => item.bucket !== "GOLD").flatMap((proxy) => (byBucket.get(proxy.bucket) ?? []).filter((row) => row.metricKey === "PRICE_CLOSE").map((row) => ({ asOf: row.asOf } as PricePoint))); const dates = sampleDates(indexPrices, fullBackfill);
+  const indexPrices = proxies.filter((item) => item.bucket !== "GOLD").flatMap((proxy) => (byBucket.get(proxy.bucket) ?? []).filter((row) => row.metricKey === "PRICE_CLOSE" && row.asOf >= range.start).map((row) => ({ asOf: row.asOf } as PricePoint))); const dates = sampleDates(indexPrices, fullBackfill);
   for (const proxy of proxies.filter((item) => item.bucket !== "GOLD")) await fetchAndCacheWeights(provider, proxy.symbol, dates, warnings);
   for (const row of await refreshAggregatedValuation(provider, proxies, dates, fetchedAt, warnings)) byBucket.set(row.subjectId as ScorableAssetBucket, [...(byBucket.get(row.subjectId as ScorableAssetBucket) ?? []), row]);
   let directCapability = "READY";
   await Promise.all(proxies.filter((item) => item.bucket !== "GOLD").map(async (proxy) => {
-    const direct = await provider.getValuationMetrics({ symbol: proxy.symbol, instrumentKind: "INDEX", metrics: ["PE_TTM", "PB"], range: { start: `${end.slice(0, 7)}-01`, end }, asOf: end });
+    // 官方指数估值与行情同一个窗口（全量 5 年、增量 1 年）：原来只拉当月，官方历史永远只有几个月，
+    // 估值分位只能拿成分股汇总的历史去比官方的当前值；停用超过一个月再打开也会留下缺口。
+    const direct = await provider.getValuationMetrics({ symbol: proxy.symbol, instrumentKind: "INDEX", metrics: ["PE_TTM", "PB"], range, asOf: end });
     if (!direct.ok && direct.error.code === "PERMISSION_DENIED") directCapability = "PERMISSION_DENIED";
     const warning = providerMessage(direct, `${proxy.label}官方指数估值`); if (warning) warnings.push(warning);
     if (direct.ok) byBucket.set(proxy.bucket, [...(byBucket.get(proxy.bucket) ?? []), ...metricRows(proxy.bucket, direct)]);

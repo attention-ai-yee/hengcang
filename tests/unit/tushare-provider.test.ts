@@ -71,6 +71,41 @@ describe("Tushare canonical adapter", () => {
     }
   });
 
+  it("接口层限流（HTTP 200 + 「每分钟最多访问该接口」）等一会儿重拉同一页，不再把那只股票的财报丢掉", async () => {
+    const fields = ["ts_code", "ann_date", "end_date", "roe", "netprofit_yoy", "tr_yoy", "or_yoy", "q_sales_yoy", "update_flag"];
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      calls += 1;
+      const body = calls === 1
+        ? { code: 40203, msg: "抱歉，您每分钟最多访问该接口200次", data: null }
+        : { code: 0, msg: null, data: { fields, items: [["600900.SH", "20261028", "20260930", 12, 8.5, 6, null, null, "1"]] } };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }));
+    const result = await new TushareProvider("test-token", 0).getEquityFundamentals("600900.SH", { start: "2025-10-30", end: "2026-10-30" });
+    expect(calls).toBe(2);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.map((row) => [row.reportPeriod, row.earningsGrowth])).toEqual([["2026-09-30", 8.5]]);
+  });
+
+  it("一直限流：重试几轮后如实返回 RATE_LIMITED", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: 40203, msg: "抱歉，您每分钟最多访问该接口200次", data: null }), { status: 200 })));
+    const result = await new TushareProvider("test-token", 0).getEquityFundamentals("600900.SH", { start: "2025-10-30", end: "2026-10-30" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("RATE_LIMITED");
+  });
+
+  it("IP 数量超限不重试（等也没用），如实返回", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ code: 40101, msg: "您的IP数量超限，最大数量为10个！", data: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await new TushareProvider("test-token", 0).getEquityFundamentals("600900.SH", { start: "2025-10-30", end: "2026-10-30" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.message).toContain("IP数量超限");
+  });
+
   it("不再把 Tushare us_trycr 伪标为实际利率", async () => {
     const provider = new TushareProvider("test-token");
     const result = await provider.getMacroSeries({

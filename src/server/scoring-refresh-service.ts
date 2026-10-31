@@ -11,7 +11,7 @@ import {
 import type { RecommendationState, RiskSeverity, ScorableAssetBucket } from "@/domain/types";
 import { BUCKET_LABELS, STATE_LABELS } from "@/lib/presentation";
 import type { ManualObservationInput } from "@/metrics/manual-import";
-import { SqliteMetricSeriesRepository } from "@/metrics/observation-repository";
+import { SqliteMetricSeriesRepository, type ProviderSelectionPolicy } from "@/metrics/observation-repository";
 import { getPortfolioView } from "./portfolio-service";
 
 export interface CandidateChain {
@@ -142,6 +142,23 @@ export function planRecommendationSignal(input: {
   };
 }
 
+/** 评分取数的来源优先级（自检脚本复算时用同一份） */
+export const SCORING_PROVIDER_POLICY: ProviderSelectionPolicy = {
+  primaryProviderByMetric: {
+    REAL_YIELD_10Y: "fred",
+    DOLLAR_INDEX: "fred",
+    PS: "tushare-index-aggregate",
+    DIVIDEND_YIELD: "tushare-index-aggregate",
+    ROE: "tushare-index-aggregate",
+    EARNINGS_GROWTH: "tushare-index-aggregate",
+    REVENUE_GROWTH: "tushare-index-aggregate",
+    INDEX_EARNINGS_GROWTH: "tushare-index-aggregate",
+    DIVIDEND_STABILITY_SCORE: "tushare-index-aggregate",
+    GOLD_ETF_FLOW_3M: "tushare-gold-etf-proxy",
+  },
+  fallbackProviders: ["tushare", "tushare-index-aggregate", "tushare-derived-forward-pe", "tushare-derived", "fred", "twelve-data", "manual"],
+};
+
 export async function refreshScoresForBuckets(
   requests: Array<{ bucket: ScorableAssetBucket; asOf: string }>,
   options: RefreshScoresOptions = {},
@@ -172,21 +189,7 @@ export async function refreshScoresForBuckets(
 
   const portfolio = await getPortfolioView();
   const targets = new Map(portfolio.targets.map((target) => [target.assetBucket, target]));
-  const builder = new ScoreInputBuilder(new SqliteMetricSeriesRepository({
-    primaryProviderByMetric: {
-      REAL_YIELD_10Y: "fred",
-      DOLLAR_INDEX: "fred",
-      PS: "tushare-index-aggregate",
-      DIVIDEND_YIELD: "tushare-index-aggregate",
-      ROE: "tushare-index-aggregate",
-      EARNINGS_GROWTH: "tushare-index-aggregate",
-      REVENUE_GROWTH: "tushare-index-aggregate",
-      INDEX_EARNINGS_GROWTH: "tushare-index-aggregate",
-      DIVIDEND_STABILITY_SCORE: "tushare-index-aggregate",
-      GOLD_ETF_FLOW_3M: "tushare-gold-etf-proxy",
-    },
-    fallbackProviders: ["tushare", "tushare-index-aggregate", "tushare-derived-forward-pe", "tushare-derived", "fred", "twelve-data", "manual"],
-  }));
+  const builder = new ScoreInputBuilder(new SqliteMetricSeriesRepository(SCORING_PROVIDER_POLICY));
   const results: Array<{ bucket: ScorableAssetBucket; asOf: string; saved: boolean; result: ScoreResult }> = [];
 
   for (const request of requests) {

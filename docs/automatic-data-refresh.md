@@ -27,7 +27,7 @@ pnpm data:refresh
 
 首次建库或 `FULL_BACKFILL=true` 时拉取 5 年行情、月频估值快照及可获得的财务历史；日常刷新只拉取增量窗口。`daily_basic` 每个交易日只请求一次全市场数据，再在本地按指数权重聚合。自动值与手工值并存；同一日期上 `is_manual_override=true` 的记录始终优先。
 
-财报（`fina_indicator`）每周增量刷新一次（v2）：距上次成功满 7 天或从未成功时，拉取近 15 个月的成分股财报，只为上次桶级汇总之后的日期生成新汇总（不覆盖全量回填算好的历史行）；状态记在 `data_source_status` 的 `tushare-fina` 行，失败下一轮自动重试。分红历史同样每周一次。
+财报（`fina_indicator`）增量刷新（v2）：财报季（3/15–5/5、7/15–9/5、10/1–11/5）距上次成功满 20 小时、其余时间满 7 天，或从未成功时，拉取近 15 个月的成分股财报，只为上次桶级汇总之后的日期生成新汇总（不覆盖全量回填算好的历史行）；状态记在 `data_source_status` 的 `tushare-fina` 行，失败下一轮自动重试。分红历史与财报同一节奏。Tushare 接口层限流（HTTP 200、「每分钟最多访问该接口 N 次」）会等过这一分钟再拉同一页，最多三轮，不再把那只股票的数据静默丢掉。用 `pnpm self-check` 可以随时用真实接口核对。
 
 价格/PE 派生的盈利增长（v2 起写入 `EARNINGS_GROWTH_DERIVED` / `INDEX_EARNINGS_GROWTH_DERIVED`，不再和成分股财报汇总的 `EARNINGS_GROWTH` / `INDEX_EARNINGS_GROWTH` 混在一条序列）会跨运行读取数据库中的 `PRICE_CLOSE` 与 `PE_TTM` 历史，按 `available_at` 做点内配对后计算约一年同比，只作参考展示，不进基本面体检。若某桶没有任何可用 PE 历史，刷新报告会显式给出告警而不是静默跳过。详见 [v2 设计说明 §2](hengcang_v2_allocation_fundamentals_thesis.md)。
 

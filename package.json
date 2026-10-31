@@ -22,7 +22,8 @@
     "data:refresh": "tsx scripts/refresh.ts",
     "backtest": "tsx scripts/backtest.ts",
     "worker": "tsx scripts/worker.ts",
-    "news:scan": "tsx scripts/news-scan.ts"
+    "news:scan": "tsx scripts/news-scan.ts",
+    "self-check": "tsx scripts/self-check.ts"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",

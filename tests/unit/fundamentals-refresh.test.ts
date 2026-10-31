@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   derivedGrowthMetricKey,
   FUNDAMENTALS_REFRESH_INTERVAL_DAYS,
+  FUNDAMENTALS_SEASON_REFRESH_HOURS,
   fundamentalsRefreshMode,
+  inReportingSeason,
   selectAggregationDates,
 } from "@/server/automatic-data-refresh-service";
 
@@ -19,12 +21,26 @@ describe("fundamentalsRefreshMode", () => {
     expect(fundamentalsRefreshMode({ fullBackfill: false, lastSuccessAt: undefined, now })).toBe("INCREMENTAL");
   });
 
-  it("距上次成功不足 7 天跳过，满 7 天增量", () => {
+  it("财报季外：距上次成功不足 7 天跳过，满 7 天增量", () => {
+    const offSeason = new Date("2026-06-18T10:00:00Z");
     const day = 24 * 60 * 60 * 1000;
-    const recent = new Date(now.getTime() - (FUNDAMENTALS_REFRESH_INTERVAL_DAYS * day - 1)).toISOString();
-    const due = new Date(now.getTime() - FUNDAMENTALS_REFRESH_INTERVAL_DAYS * day).toISOString();
+    const recent = new Date(offSeason.getTime() - (FUNDAMENTALS_REFRESH_INTERVAL_DAYS * day - 1)).toISOString();
+    const due = new Date(offSeason.getTime() - FUNDAMENTALS_REFRESH_INTERVAL_DAYS * day).toISOString();
+    expect(fundamentalsRefreshMode({ fullBackfill: false, lastSuccessAt: recent, now: offSeason })).toBe("SKIP");
+    expect(fundamentalsRefreshMode({ fullBackfill: false, lastSuccessAt: due, now: offSeason })).toBe("INCREMENTAL");
+  });
+
+  it("财报季里每天一次（满 20 小时就刷），新财报不用等一周", () => {
+    const hour = 60 * 60 * 1000;
+    const recent = new Date(now.getTime() - (FUNDAMENTALS_SEASON_REFRESH_HOURS * hour - 1)).toISOString();
+    const due = new Date(now.getTime() - FUNDAMENTALS_SEASON_REFRESH_HOURS * hour).toISOString();
     expect(fundamentalsRefreshMode({ fullBackfill: false, lastSuccessAt: recent, now })).toBe("SKIP");
     expect(fundamentalsRefreshMode({ fullBackfill: false, lastSuccessAt: due, now })).toBe("INCREMENTAL");
+  });
+
+  it("财报季的边界", () => {
+    expect(["03-14", "03-15", "05-05", "05-06", "07-15", "09-05", "09-06", "10-01", "11-05", "11-06", "12-31"].map((monthDay) => inReportingSeason(`2026-${monthDay}`)))
+      .toEqual([false, true, true, false, true, true, false, true, true, false, false]);
   });
 
   it("无法解析的上次成功时间按「到期」处理，不会永远跳过", () => {

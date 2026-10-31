@@ -25,6 +25,12 @@ export function getDatabase() {
   return drizzle(globalForDb.sqlite, { schema });
 }
 
+/** 原始 SQLite 句柄（只读的自检脚本直接写 SQL 用） */
+export function rawDatabase(): Database.Database {
+  getDatabase();
+  return globalForDb.sqlite as Database.Database;
+}
+
 export function closeDatabase() {
   globalForDb.sqlite?.close();
   globalForDb.sqlite = undefined;

@@ -14,7 +14,7 @@ v2 已完成并合入 `main`：默认配置改为 60% 权益、其中海外 25%�
 | 投资逻辑、失效条件、事件日志 | 完成 |
 | AI 新闻监控（DeepSeek 搜索 + 模型） | 完成。2026-10-28 用真实接口跑通「AI 起草 → 保存 → 检查新闻」 |
 | 评分计算 | 2026-10-31 端到端核算后修正（模型版本 7）：分位只看近 5 年、估值按月取样、一条序列只用一个来源、中位秩，见 [v2 设计说明 §8](docs/hengcang_v2_allocation_fundamentals_thesis.md) |
-| 测试 | `tsc`、`eslint`、`next build` 通过；47 个测试文件、320 个测试全部通过（含全链路核算：合成数据跑完整刷新，测试内独立重算评分逐项对比） |
+| 测试 | `tsc`、`eslint`、`next build` 通过；47 个测试文件、325 个测试全部通过（含全链路核算：合成数据跑完整刷新，测试内独立重算评分逐项对比） |
 | 依赖安全 | 2026-10-31 升级 Next.js 16.4.3、zod 4.6.7 等，生产依赖没有已知漏洞；服务器默认只监听本机 |
 | 代码审查 | 2026-10-28 两路复查、10-30 真实数据复查、10-31 计算复查发现的问题已修，剩余的低危项见 [CODE_REVIEW.md](CODE_REVIEW.md) |
 
@@ -50,7 +50,7 @@ pnpm dev
 
 1. 停掉 `pnpm dev` 和 `pnpm worker`，先备份数据库：`cp data/hengcang.db data/hengcang.backup.db`。
 2. `git pull && pnpm install && pnpm db:migrate`。
-3. 跑一次全量回填：`FULL_BACKFILL=true pnpm data:refresh`。它会按修正后的规则重算历史财报汇总、补上报告期标记和占比，体检才能按报告期比较；比平时慢，也会多用一些 Tushare 额度。
+3. 跑一次全量回填：`FULL_BACKFILL=true pnpm data:refresh`，完成后跑 `pnpm self-check` 核对。它会按修正后的规则重算历史财报汇总、补上报告期标记和占比，体检才能按报告期比较；比平时慢，也会多用一些 Tushare 额度。
 4. 可选：在 `.env.local` 填 `DEEPSEEK_API_KEY` 开启 AI 新闻监控，重启 `pnpm dev`，并常驻 `pnpm worker`。
 5. 在「持仓与风险」里给单一个股和主题 ETF 写投资逻辑和失效条件（可以先点「让 AI 起草」，改好再保存）。股票账户如果还是一条汇总记录，先拆成具体持仓。
 
@@ -70,6 +70,7 @@ pnpm data:refresh  # 自动拉取 Tushare 数据并重算评分（FULL_BACKFILL=
 pnpm backtest      # 只读回测报告（--persist 落库，--cost N 覆盖成本假设）
 pnpm worker        # 常驻定时进程：每 30 分钟检查一次，数据距上次成功刷新满 6 小时就刷新，新闻每天扫一次（Ctrl+C 退出）
 pnpm news:scan     # AI 新闻监控：扫描到期的投资逻辑（--force 立即扫描全部）
+pnpm self-check    # 用真实接口核对数据与计算（只读）：行情与 Tushare 一致、估值口径、财报新鲜度、评分复算、DeepSeek 搜索/读网页/模型
 ```
 
 ## 环境变量
@@ -122,7 +123,7 @@ OpportunityScore = 70% × Cheapness + 30% × Trend
 
 配置 `TUSHARE_TOKEN` 后，在“资产评分”或“数据状态”点击“一键自动刷新评分”，也可以运行 `pnpm data:refresh`。首次运行（或 `FULL_BACKFILL=true`）回填近 5 年数据，日常增量拉取近 1 年。
 
-- 财报（`fina_indicator`）与分红每周增量刷新一次（近 15 个月窗口），并重算最近 30 天的桶级汇总，晚几天才进 Tushare 的财报也能并进来；每个汇总行记下按权重占主导的报告期。
+- 财报（`fina_indicator`）与分红在财报季（3/15–5/5、7/15–9/5、10/1–11/5）每天增量刷新一次、其余时间每周一次（近 15 个月窗口），并重算最近 30 天的桶级汇总，晚几天才进 Tushare 的财报也能并进来；每个汇总行记下按权重占主导的报告期。
 - 价格/PE 推算的盈利增长单独存为 `*_DERIVED` 指标，只作参考、不进体检；WGC 不可用时回退国内黄金 ETF 代理。
 - 观察值幂等写入；手工导入的值不会被自动刷新删除或覆盖。
 

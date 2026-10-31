@@ -75,7 +75,11 @@ export class TushareProvider implements MarketDataProvider {
   readonly id = "tushare";
   private readonly limiter = new TushareRateLimiter();
 
-  constructor(private readonly token = process.env.TUSHARE_TOKEN) {}
+  constructor(
+    private readonly token = process.env.TUSHARE_TOKEN,
+    /** 接口层限流后等多久再拉同一页（默认等过这一分钟；测试里设 0） */
+    private readonly rateLimitWaitMs = 61_000,
+  ) {}
 
   capabilities(): ProviderCapability[] {
     return ["PRICE_SERIES", "VALUATION_METRICS", "FUNDAMENTAL_METRICS", "MACRO_SERIES"];
@@ -307,6 +311,8 @@ export class TushareProvider implements MarketDataProvider {
 
   private static readonly PAGE_SIZE = 1000;
   private static readonly MAX_PAGES = 30;
+  /** 每次查询最多为接口层限流等几轮 */
+  private static readonly RATE_LIMIT_RETRIES = 3;
 
   /**
    * 分页拉全（Code Review M4）：Tushare 单次返回有行数上限，静默截断会让尾部数据
@@ -316,6 +322,7 @@ export class TushareProvider implements MarketDataProvider {
   private async query(apiName: string, params: Record<string, string>, fields: string): Promise<{ response: TushareResponse; truncated: boolean }> {
     const items: Array<Array<string | number | null>> = [];
     let responseFields: string[] | undefined;
+    let rateLimitWaits = 0;
     for (let page = 0; page < TushareProvider.MAX_PAGES; page += 1) {
       const response = await this.limiter.run(
         () => fetchJson<TushareResponse>("https://api.tushare.pro", {
@@ -331,6 +338,14 @@ export class TushareProvider implements MarketDataProvider {
         (error) => TushareProvider.shouldRetryError(error),
       );
       if (response.code !== 0 || !response.data) {
+        // 接口层限流（HTTP 200、code ≠ 0、「每分钟最多访问该接口 N 次」）不会抛错，限流器的重试管不到：
+        // 原来直接当失败，那只成分股的财报这一轮就静默缺掉（覆盖率下降，汇总降级甚至不出）。等过这一分钟再拉同一页。
+        if (failureCode(response) === "RATE_LIMITED" && rateLimitWaits < TushareProvider.RATE_LIMIT_RETRIES) {
+          rateLimitWaits += 1;
+          await new Promise((resolve) => setTimeout(resolve, this.rateLimitWaitMs));
+          page -= 1;
+          continue;
+        }
         if (items.length === 0) return { response, truncated: false };
         break;
       }

@@ -138,14 +138,30 @@ const FUNDAMENTALS_STATUS_PROVIDER = "tushare-fina";
 export type FundamentalsRefreshMode = "FULL" | "INCREMENTAL" | "SKIP";
 
 /**
+ * 财报季（上海日期）：3/15–5/5 年报与一季报、7/15–9/5 半年报、10/1–11/5 三季报。
+ * 这段时间新财报每天都在出，体检要的「最新一期」晚一周才进来太慢。
+ */
+export function inReportingSeason(day: string): boolean {
+  const monthDay = day.slice(5, 10);
+  return (monthDay >= "03-15" && monthDay <= "05-05") || (monthDay >= "07-15" && monthDay <= "09-05") || (monthDay >= "10-01" && monthDay <= "11-05");
+}
+
+/** 财报季里距上次成功满这么多小时就再刷一次（worker 每 6 小时刷新，等于每天一次） */
+export const FUNDAMENTALS_SEASON_REFRESH_HOURS = 20;
+
+/**
  * v1 只在全量回填时拉财报，日常刷新永远跳过：ROE、营收增长等没有派生兜底的指标半年后
- * 触发 180 天新鲜度闸门。v2：全量回填照旧；否则距上次成功超过 7 天就做一次增量。
+ * 触发 180 天新鲜度闸门。v2：全量回填照旧；否则距上次成功超过 7 天就做一次增量；
+ * 2026-10-31 起财报季里每天一次（原来最多晚一周才看到新财报）。
  */
 export function fundamentalsRefreshMode(input: { fullBackfill: boolean; lastSuccessAt: string | null | undefined; now: Date }): FundamentalsRefreshMode {
   if (input.fullBackfill) return "FULL";
   if (!input.lastSuccessAt) return "INCREMENTAL";
   const elapsedMs = input.now.getTime() - Date.parse(input.lastSuccessAt);
-  return Number.isFinite(elapsedMs) && elapsedMs < FUNDAMENTALS_REFRESH_INTERVAL_DAYS * 24 * 60 * 60 * 1000 ? "SKIP" : "INCREMENTAL";
+  const intervalMs = inReportingSeason(shanghaiDate(input.now))
+    ? FUNDAMENTALS_SEASON_REFRESH_HOURS * 60 * 60 * 1000
+    : FUNDAMENTALS_REFRESH_INTERVAL_DAYS * 24 * 60 * 60 * 1000;
+  return Number.isFinite(elapsedMs) && elapsedMs < intervalMs ? "SKIP" : "INCREMENTAL";
 }
 
 /** 增量模式回头重算的天数：公告日早于上次汇总、但晚几天才进 Tushare 的财报也要并进去 */

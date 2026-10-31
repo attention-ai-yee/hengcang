@@ -73,6 +73,7 @@ pnpm backtest      # 只读回测报告（--persist 落库，--cost N 覆盖成�
 pnpm worker        # 常驻定时进程：每 30 分钟检查一次，数据距上次成功刷新满 6 小时就刷新，新闻每天扫一次（Ctrl+C 退出）
 pnpm news:scan     # AI 新闻监控：扫描到期的投资逻辑（--force 立即扫描全部）
 pnpm self-check    # 用真实接口核对数据与计算（只读）：行情与 Tushare 一致、估值口径、财报新鲜度、评分复算、DeepSeek 搜索/读网页/模型
+pnpm snapshot:export / snapshot:import   # 市场数据存档（不含持仓等个人数据）；含 Tushare 数据，只能放私有仓库
 ```
 
 ## 环境变量
@@ -186,5 +187,5 @@ OpportunityScore = 70% × Cheapness + 30% × Trend
 - [v2 设计说明](docs/hengcang_v2_allocation_fundamentals_thesis.md)：默认配置、财报数据、基本面体检、投资逻辑、AI 新闻监控、升级步骤
 - [自动数据刷新](docs/automatic-data-refresh.md)、[Manual 指标导入](docs/manual-observation-import.md)
 - [趋势 v1.3 与科技 v1.4](docs/hengcang_trend_v1_3_tech_v1_4.md)、[黄金模型 v1.2](docs/hengcang_gold_model_revision_v1_2.md)（宏观闸门已在 v2 删除）
-- [在云端会话里用真实数据验证](docs/cloud-verification.md)：本机没有开发环境时的做法（Tushare 只能用一条连接）
+- [在云端会话里用真实数据验证](docs/cloud-verification.md)：本机没有开发环境时的做法（Tushare 只能用一条连接；市场数据存档放私有仓库，本仓库是公开的）
 - [代码审查记录](CODE_REVIEW.md)

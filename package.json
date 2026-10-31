@@ -23,7 +23,9 @@
     "backtest": "tsx scripts/backtest.ts",
     "worker": "tsx scripts/worker.ts",
     "news:scan": "tsx scripts/news-scan.ts",
-    "self-check": "tsx scripts/self-check.ts"
+    "self-check": "tsx scripts/self-check.ts",
+    "snapshot:export": "tsx scripts/snapshot.ts export",
+    "snapshot:import": "tsx scripts/snapshot.ts import"
   },
   "dependencies": {
     "better-sqlite3": "13.0.3",

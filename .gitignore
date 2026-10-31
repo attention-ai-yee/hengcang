@@ -5,6 +5,10 @@ playwright-report/
 test-results/
 data/*.db
 data/*.db-*
+# 市场数据存档含 Tushare 数据：本仓库是公开的，存档只能放私有仓库
+data/snapshots/
+*.sqlite.gz
+*.sqlite.gz.json
 .env
 .env.local
 *.tsbuildinfo

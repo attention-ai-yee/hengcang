@@ -40,6 +40,37 @@ pnpm self-check                          # 逐项核对，输出就是给用户�
 | 评分复算 | ✓ 与库里一致（第 7 版算法）；下一行是状态和体检明细 |
 | DeepSeek | ✓ 新闻搜索、读网页、模型都正常（个别网站读不到正文是正常的） |
 
+## 数据存档：不用每次全量回填
+
+云端数据库是临时的，会话结束就没了。市场数据存档放在**私有仓库 `attention-ai-yee/etf-trend` 的 `hengcang-data` 分支**（只有这一个用途，和 etf-trend 的代码无关）。
+
+- **本仓库（hengcang）是公开的，存档绝不能提交到这里。** `.gitignore` 已忽略 `data/snapshots/` 和 `*.sqlite.gz`；提交前看一眼 `git status`。
+- 存档只含市场数据（行情、官方估值、成分股汇总的估值与财报、指数成分权重、数据源状态、评分），没有持仓、组合设置、投资逻辑、新闻、手工录入的数值（`src/server/market-snapshot.ts`）。
+- 会话里没有 etf-trend 时，先把它加进会话（需要推送权限）。
+
+分支里已有存档时，用存档代替全量回填：
+
+```bash
+DATA=/tmp/hengcang-data
+git clone --depth 1 --branch hengcang-data "$(git -C ../etf-trend remote get-url origin)" $DATA
+cd hengcang && pnpm install
+export DATABASE_URL=/tmp/hengcang-verify/hengcang.db
+pnpm db:migrate && pnpm db:seed
+pnpm snapshot:import $DATA/market-data.sqlite.gz
+pnpm data:refresh        # 增量：平时十几次 Tushare 调用；财报到期时（财报季每天、平时每周）约 400 次、3–4 分钟
+pnpm self-check
+```
+
+分支里还没有存档（`market-data.sqlite.gz` 不存在）时，按上面「步骤」全量回填一次。
+
+每次跑完都把存档推回去（分支只留一个提交，每次 amend 后强推）：
+
+```bash
+pnpm snapshot:export     # → data/snapshots/market-data.sqlite.gz 和 .json
+cp data/snapshots/market-data.sqlite.gz data/snapshots/market-data.sqlite.gz.json $DATA/
+cd $DATA && git add -A && git commit --amend -m "data: hengcang market data as of <最新行情日期>" && git push -f origin hengcang-data
+```
+
 ## 汇报给用户
 
 - self-check 里每个 ✗ / ⚠ 的原因和处理办法。
@@ -49,5 +80,5 @@ pnpm self-check                          # 逐项核对，输出就是给用户�
 
 ## 收尾
 
-- 删除 `/tmp/hengcang-verify`。
+- 先把存档推回 `hengcang-data` 分支，再删除 `/tmp/hengcang-verify` 和 `/tmp/hengcang-data`。
 - 确认 `git status` 干净：不要提交数据库、`.env.local` 或任何含 Token 的文件。

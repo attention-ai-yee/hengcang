@@ -11,6 +11,9 @@ export class TushareRateLimiter {
   private readonly retries: number;
   private active = 0;
   private readonly starts: number[] = [];
+  private lastStart = 0;
+  /** 相邻两个请求最少间隔（毫秒）= 60 秒 / 每分钟上限 */
+  private readonly minIntervalMs: number;
 
   constructor(options: TushareRateLimiterOptions = {}) {
     // 环境变量钳位（Code Review M6）：空串/非数字/超界都不允许——RPM=0 会让 acquire 死循环挂起。
@@ -20,6 +23,9 @@ export class TushareRateLimiter {
     // 一个 token 最多 10 个 IP，2026-10-30 就这样被锁过。受 RPM 上限约束，并发对总耗时帮助不大。
     this.concurrency = clampInt(process.env.TUSHARE_CONCURRENCY ?? options.concurrency, 1, 1, 16);
     this.retries = Math.min(Math.max(options.retries ?? 2, 0), 5);
+    // 均匀发请求，不「先连发一分钟的额度再干等」：干等的几十秒里长连接会空闲超时被关掉，
+    // 重连就换一个出口 IP（2026-10-31 云端全量回填实测：连发 + 干等开了 5 条连接）。
+    this.minIntervalMs = 60_000 / this.maxRequestsPerMinute;
   }
 
   async run<T>(request: () => Promise<T>, shouldRetry: (error: unknown) => boolean): Promise<T> {
@@ -45,13 +51,15 @@ export class TushareRateLimiter {
     while (true) {
       const now = Date.now();
       while (this.starts.length > 0 && this.starts[0] <= now - 60_000) this.starts.shift();
-      if (this.active < this.concurrency && this.starts.length < this.maxRequestsPerMinute) {
+      const spacingWait = this.lastStart + this.minIntervalMs - now;
+      if (this.active < this.concurrency && this.starts.length < this.maxRequestsPerMinute && spacingWait <= 0) {
         this.active += 1;
         this.starts.push(now);
+        this.lastStart = now;
         return;
       }
-      const nextMinute = this.starts[0] ? Math.max(10, this.starts[0] + 60_000 - now) : 10;
-      await delay(this.active >= this.concurrency ? 25 : nextMinute);
+      const windowWait = this.starts.length >= this.maxRequestsPerMinute && this.starts[0] ? this.starts[0] + 60_000 - now : 0;
+      await delay(this.active >= this.concurrency ? 25 : Math.max(10, spacingWait, windowWait));
     }
   }
 }

@@ -245,7 +245,12 @@ export function commitProviderMetricObservations(rows: ProviderMetricObservation
           eq(metricObservations.availableAt, row.availableAt),
         ))
         .get();
-      const values = { ...row, isManualOverride: false } as const;
+      // 只写入库字段：调用方传来的对象里混进 id 之类的字段时，原来会被原样写进去（主键冲突）
+      const values = {
+        subjectType: row.subjectType, subjectId: row.subjectId, metricKey: row.metricKey, value: row.value, unit: row.unit,
+        provider: row.provider, observedAt: row.observedAt, availableAt: row.availableAt, asOf: row.asOf, fetchedAt: row.fetchedAt,
+        quality: row.quality, metadataJson: row.metadataJson ?? null, isManualOverride: false,
+      } as const;
       if (existing) {
         transaction.update(metricObservations).set(values).where(eq(metricObservations.id, existing.id)).run();
         updated += 1;

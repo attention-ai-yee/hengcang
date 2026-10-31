@@ -223,6 +223,31 @@ describe("刷新 + 评分全链路核算（合成数据，测试内独立重算�
     expect(row.trendScore).toBe(expectedTrend(symbol));
   });
 
+  it("全量回填之后的增量刷新不报错、分数照常更新（原来派生行带着来源行的主键，写回时冲突，每次增量刷新都失败）", async () => {
+    const report = await refreshAutomaticMarketData({
+      provider: fakeTushare as unknown as TushareProvider,
+      fredProvider: fakeFred as unknown as FredProvider,
+      now: new Date("2026-10-30T12:00:00Z"),
+      fullBackfill: false,
+    });
+    expect(report.status).not.toBe("ERROR");
+    expect(report.buckets.every((bucket) => bucket.scoreSaved)).toBe(true);
+    expect(latestSnapshot("BROAD_EQUITY").row.opportunityScore).not.toBeNull();
+  }, 120_000);
+
+  it("周末刷新：分红稳定性记在最后一个交易日，最新评分看得到（原来记成周六，体检退回去年年底那行、判缺数据）", async () => {
+    await refreshAutomaticMarketData({
+      provider: fakeTushare as unknown as TushareProvider,
+      fredProvider: fakeFred as unknown as FredProvider,
+      now: new Date("2026-10-31T10:00:00Z"),
+      fullBackfill: true,
+    });
+    const row = getDatabase().select().from(scoreSnapshots)
+      .where(and(eq(scoreSnapshots.assetBucket, "VALUE_DIVIDEND"), eq(scoreSnapshots.asOf, EVAL))).get();
+    const health = (JSON.parse(row!.componentsJson) as { fundamentalHealth: { checks: Array<{ key: string; status: string; latest: { asOf: string } | null }> } }).fundamentalHealth;
+    expect(health.checks.find((check) => check.key === "dividendStability")).toMatchObject({ status: "OK", latest: { asOf: EVAL } });
+  }, 120_000);
+
   it("科技：PEG 由官方 PE 与汇总增速按日期对齐得出，有完整历史（不再只剩重合的几天）", () => {
     const { components } = latestSnapshot("TECH_GROWTH");
     expect(components["cheapness.pe"].source).toBe("tushare");

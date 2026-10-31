@@ -63,6 +63,10 @@ function aggregateRows(bucket: ScorableAssetBucket, results: AggregateMetricResu
   return results.flatMap((result): ProviderMetricObservationInput[] => result.value === null ? [] : [{ subjectType: "ASSET_BUCKET", subjectId: bucket, metricKey: result.metricKey, value: result.value.toFixed(8), unit: result.metricKey === "DIVIDEND_YIELD" || result.metricKey === "ROE" || result.metricKey.includes("GROWTH") ? "percent" : "ratio", provider: AGGREGATE_PROVIDER, observedAt: `${result.effectiveDate || asOf}T15:00:00+08:00`, availableAt: `${asOf}T18:00:00+08:00`, asOf, fetchedAt, quality: result.quality, metadataJson: JSON.stringify({ constituentCoverage: result.constituentCoverage, constituentCount: result.constituentCount, validConstituentCount: result.validConstituentCount, effectiveDate: result.effectiveDate, ...(result.reportPeriod ? { reportPeriod: result.reportPeriod, reportPeriodShare: result.reportPeriodShare } : {}) }) }]);
 }
 /** 读取某桶指定指标的全量入库历史（跨运行），供派生序列做点内配对（Code Review H7）。 */
+/**
+ * 只取入库所需的字段：原来整行（含主键 id）原样返回，派生行 `{ ...来源行 }` 把来源行的 id 带进
+ * 新行，写回时主键冲突，全量回填之后的每一次增量刷新都整体失败（2026-10-31 实跑复现）。
+ */
 function bucketMetricHistory(bucket: string, metricKeys: string[]): ProviderMetricObservationInput[] {
   return metricKeys.flatMap((metricKey) =>
     getDatabase()
@@ -75,8 +79,22 @@ function bucketMetricHistory(bucket: string, metricKeys: string[]): ProviderMetr
           eq(metricObservations.metricKey, metricKey),
         ),
       )
-      .all(),
-  ) as unknown as ProviderMetricObservationInput[];
+      .all()
+      .map((row): ProviderMetricObservationInput => ({
+        subjectType: row.subjectType as ProviderMetricObservationInput["subjectType"],
+        subjectId: row.subjectId,
+        metricKey: row.metricKey as CanonicalMetricKey,
+        value: row.value,
+        unit: row.unit,
+        provider: row.provider,
+        observedAt: row.observedAt,
+        availableAt: row.availableAt,
+        asOf: row.asOf,
+        fetchedAt: row.fetchedAt,
+        quality: row.quality as ProviderMetricObservationInput["quality"],
+        ...(row.metadataJson ? { metadataJson: row.metadataJson } : {}),
+      })),
+  );
 }
 
 /**
@@ -504,7 +522,10 @@ export async function refreshAutomaticMarketData(options: AutomaticRefreshOption
   warnings.push(...fundamentalWarnings);
   for (const row of fundamentalRows.filter((row) => row.subjectType === "ASSET_BUCKET")) byBucket.set(row.subjectId as ScorableAssetBucket, [...(byBucket.get(row.subjectId as ScorableAssetBucket) ?? []), row]);
   // 分红历史一年才变一次，跟财报同一节奏（v1 每 6 小时重拉全部成分股）。
-  if (fundamentalsMode !== "SKIP") byBucket.set("VALUE_DIVIDEND", [...(byBucket.get("VALUE_DIVIDEND") ?? []), ...await refreshDividendStability(provider, proxies.find((item) => item.bucket === "VALUE_DIVIDEND"), end, fullBackfill, warnings, fetchedAt)]);
+  // 分红稳定性那一行记在最后一个交易日：评分按行情日期算，周末或开盘前刷新时记成日历上的今天，
+  // 最新评分看不到它，退回去年年底那行，下半年超过 180 天就判「缺数据」（2026-10-31 云端实跑发现）。
+  const latestTradingDay = indexPrices.reduce((latest, point) => (point.asOf > latest ? point.asOf : latest), "") || end;
+  if (fundamentalsMode !== "SKIP") byBucket.set("VALUE_DIVIDEND", [...(byBucket.get("VALUE_DIVIDEND") ?? []), ...await refreshDividendStability(provider, proxies.find((item) => item.bucket === "VALUE_DIVIDEND"), latestTradingDay, fullBackfill, warnings, fetchedAt)]);
   for (const bucket of ["VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"] as const) {
     // 派生盈利增长写入单独的 *_DERIVED 参考指标（每次都算），不再充当财报口径的兜底。
     const rows = byBucket.get(bucket) ?? [];

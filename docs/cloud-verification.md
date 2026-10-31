@@ -16,7 +16,7 @@
 - 不要用 `tushare` Python 包的 `pro_api`、curl 循环或别的脚本直接调 Tushare：它们每次请求都新开连接。
 - 一旦出现「IP数量超限」，衡仓和 etf-trend 都会立刻停止调用。这时停下来告诉用户，等限制解除或在 Tushare 个人中心重置 token。
 
-实测：顺序发 100 个请求，Tushare 全程只用了 1 条连接。
+实测：顺序发 100 个请求，Tushare 全程只用了 1 条连接。2026-10-31 第一次云端全量回填开了 5 条（限流器先连发一分钟额度再干等，干等时连接被关），之后改成均匀发请求（默认每 0.5 秒一个）。一个 token 一天里最好只做一次全量回填 + 几次自检，留足余量。
 
 ## 步骤
 
@@ -26,7 +26,7 @@ pnpm install
 mkdir -p /tmp/hengcang-verify
 export DATABASE_URL=/tmp/hengcang-verify/hengcang.db   # 临时库，不要放进仓库
 pnpm db:migrate && pnpm db:seed
-FULL_BACKFILL=true pnpm data:refresh    # 15–30 分钟；status 为 READY，或只因没配 FRED 而 DEGRADED
+FULL_BACKFILL=true pnpm data:refresh    # 约 10 分钟；status 为 READY，或只因没配 FRED 而 DEGRADED
 pnpm self-check                          # 逐项核对，输出就是给用户的报告
 ```
 

@@ -30,20 +30,20 @@ export class ScoreInputBuilder {
 
     switch (bucket) {
       case "VALUE_DIVIDEND": {
-        const [pe, pb, dividendYield, earningsGrowth, roe, dividendStability, fundamentalOverride] = await Promise.all([
+        const [pe, pb, dividendYield, earningsGrowth, roe, dividendStability, fundamentalOverride, earningsGrowthQuarter] = await Promise.all([
           load("PE_TTM"), load("PB"), load("DIVIDEND_YIELD"), load("EARNINGS_GROWTH"), load("ROE"),
-          load("DIVIDEND_STABILITY_SCORE"), load("FUNDAMENTAL_OVERRIDE_SCORE"),
+          load("DIVIDEND_STABILITY_SCORE"), load("FUNDAMENTAL_OVERRIDE_SCORE"), load("EARNINGS_GROWTH_Q"),
         ]);
         return {
-          bucket, asOf, trend: priceFeatures.trend, pe, pb, dividendYield, earningsGrowth, roe,
+          bucket, asOf, trend: priceFeatures.trend, pe, pb, dividendYield, earningsGrowth, roe, earningsGrowthQuarter,
           dividendStability: directScore(dividendStability),
           fundamentalOverride: fundamentalOverride.currentValue === null ? undefined : directScore(fundamentalOverride),
         };
       }
       case "TECH_GROWTH": {
         // 科技 v1.4（Route B）：全部使用真实聚合数据；PEG_TTM 为 PE 与已实现增长的确定性变换。
-        const [pe, ps, earningsGrowth, revenueGrowth] = await Promise.all([
-          load("PE_TTM"), load("PS"), load("EARNINGS_GROWTH"), load("REVENUE_GROWTH"),
+        const [pe, ps, earningsGrowth, revenueGrowth, earningsGrowthQuarter, revenueGrowthQuarter] = await Promise.all([
+          load("PE_TTM"), load("PS"), load("EARNINGS_GROWTH"), load("REVENUE_GROWTH"), load("EARNINGS_GROWTH_Q"), load("REVENUE_GROWTH_Q"),
         ]);
         const peg = pe.currentValue !== null && earningsGrowth.currentValue !== null
           ? deriveRatioSeries(pe, earningsGrowth, { featureName: "PEG_TTM" })
@@ -56,15 +56,17 @@ export class ScoreInputBuilder {
           ps,
           earningsGrowth,
           revenueGrowth,
+          earningsGrowthQuarter,
+          revenueGrowthQuarter,
           peg: peg && peg.currentValue !== null ? peg : undefined,
         };
       }
       case "BROAD_EQUITY": {
-        const [pe, pb, equityRiskPremium, indexEarningsGrowth, earningsRevision] = await Promise.all([
-          load("PE_TTM"), load("PB"), load("EQUITY_RISK_PREMIUM"), load("INDEX_EARNINGS_GROWTH"), load("EARNINGS_REVISION"),
+        const [pe, pb, equityRiskPremium, indexEarningsGrowth, earningsRevision, indexEarningsGrowthQuarter] = await Promise.all([
+          load("PE_TTM"), load("PB"), load("EQUITY_RISK_PREMIUM"), load("INDEX_EARNINGS_GROWTH"), load("EARNINGS_REVISION"), load("INDEX_EARNINGS_GROWTH_Q"),
         ]);
         return {
-          bucket, asOf, trend: priceFeatures.trend, pe, pb, indexEarningsGrowth,
+          bucket, asOf, trend: priceFeatures.trend, pe, pb, indexEarningsGrowth, indexEarningsGrowthQuarter,
           equityRiskPremium: equityRiskPremium.currentValue === null ? undefined : equityRiskPremium,
           earningsRevision: earningsRevision.currentValue === null ? undefined : earningsRevision,
         };

@@ -234,3 +234,34 @@ describe("手工基本面判断只在新鲜时替代自动体检（复查发现�
     expect(health.checks.map((check) => check.key)).toEqual(["fundamentalOverride"]);
   });
 });
+
+describe("增速体检看单季同比（2026-10-31）", () => {
+  function periodicSeries(points: Array<[string, number, string]>): MetricSeries {
+    const history = points.map(([asOf, value, reportPeriod]) => ({ value, asOf, availableAt: `${asOf}T18:00:00+08:00`, quality: "VALID" as const, reportPeriod }));
+    return { currentValue: history.at(-1)!.value, history, source: "tushare-index-aggregate", asOf: history.at(-1)!.asOf, availableAt: history.at(-1)!.availableAt, quality: "VALID", coverage: 1 };
+  }
+  const broad = (cumulative: MetricSeries, quarter?: MetricSeries): AssetModelInput => ({
+    bucket: "BROAD_EQUITY", asOf: EVAL_DATE, trend, pe: EMPTY, pb: EMPTY, indexEarningsGrowth: cumulative, indexEarningsGrowthQuarter: quarter,
+  });
+  // 累计同比还是正的（半年报 +26%、前三季度 +10%），单季已经连续两个季度为负
+  const cumulative = periodicSeries([["2026-08-31", 26, "2026-06-30"], ["2026-10-24", 10, "2026-09-30"]]);
+  const quarter = periodicSeries([["2026-08-31", -3, "2026-06-30"], ["2026-10-24", -21, "2026-09-30"]]);
+
+  it("单季连续两个季度为负 → 恶化，即使累计同比还是正的", () => {
+    const health = assessFundamentalHealth(broad(cumulative, quarter));
+    expect(health.status).toBe("DETERIORATING");
+    expect(health.checks[0]).toMatchObject({ label: "指数盈利同比（单季）", latest: { value: -21 }, previous: { value: -3 } });
+  });
+
+  it("单季没有上一期（旧库刚升级）→ 退回累计同比，标签注明", () => {
+    const onlyLatest = periodicSeries([["2026-10-24", -21, "2026-09-30"]]);
+    const health = assessFundamentalHealth(broad(cumulative, onlyLatest));
+    expect(health.status).toBe("HEALTHY");
+    expect(health.checks[0]).toMatchObject({ label: "指数盈利同比（累计）", latest: { value: 10 }, previous: { value: 26 } });
+  });
+
+  it("没有单季数据 → 用累计同比", () => {
+    expect(assessFundamentalHealth(broad(cumulative)).checks[0].label).toBe("指数盈利同比（累计）");
+  });
+});
+

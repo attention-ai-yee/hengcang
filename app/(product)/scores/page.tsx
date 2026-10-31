@@ -33,7 +33,7 @@ export default async function ScoresPage() {
         <h2 className="text-lg font-semibold">评分如何计算</h2>
           <div className="mt-4 grid gap-3 text-sm leading-6 md:grid-cols-3">
             <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>1. 便宜程度与趋势</strong><p className="mt-1 text-[#66736d]">只使用当时已经发布的数据计算滚动历史百分位，越高越有吸引力；覆盖率低于 60% 为低可信度，60%–80% 为中等，代理数据最高只到中等。</p></div>
-          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>2. 基本面体检</strong><p className="mt-1 text-[#66736d]">不打分，只判断是否在恶化：盈利同比最近两期（相隔约一个季度）都为负；科技桶营收同比两期为负；红利桶分红稳定性低于 {HEALTH.dividendStabilityFloor}。恶化 → 暂停新增、重新评估；数据不足 → 最多小幅增配。</p></div>
+          <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>2. 基本面体检</strong><p className="mt-1 text-[#66736d]">不打分，只判断是否在恶化：盈利单季同比连续两个季度为负（还没有单季数据时看累计同比）；科技桶营收同样；红利桶分红稳定性低于 {HEALTH.dividendStabilityFloor}。恶化 → 暂停新增、重新评估；数据不足 → 最多小幅增配。</p></div>
           <div className="rounded-xl bg-[#f2f5f2] p-4"><strong>3. 计算配置吸引力分</strong><p className="mt-1 text-[#66736d]">{CHEAP_PCT}% × 便宜程度 + {TREND_PCT}% × 趋势。高分表示配置吸引力更强，不代表保证上涨。</p></div>
         </div>
         <ScoreColorLegend />

@@ -80,6 +80,8 @@ export interface ValueDividendInput extends BaseModelInput {
   pb: MetricSeries;
   dividendYield: MetricSeries;
   earningsGrowth: MetricSeries;
+  /** 单季同比（体检优先用它，缺「上一期」时退回累计同比） */
+  earningsGrowthQuarter?: MetricSeries;
   roe: MetricSeries;
   dividendStability: DirectScoreMetric;
   fundamentalOverride?: DirectScoreMetric;
@@ -97,6 +99,8 @@ export interface TechGrowthInput extends BaseModelInput {
   ps: MetricSeries;
   earningsGrowth: MetricSeries;
   revenueGrowth: MetricSeries;
+  earningsGrowthQuarter?: MetricSeries;
+  revenueGrowthQuarter?: MetricSeries;
   peg?: MetricSeries;
 }
 
@@ -106,6 +110,7 @@ export interface BroadEquityInput extends BaseModelInput {
   pb: MetricSeries;
   equityRiskPremium?: MetricSeries;
   indexEarningsGrowth: MetricSeries;
+  indexEarningsGrowthQuarter?: MetricSeries;
   earningsRevision?: MetricSeries;
 }
 

@@ -23,6 +23,9 @@ export interface EquityFundamentalSnapshot {
   roe: number | null;
   earningsGrowth: number | null;
   revenueGrowth: number | null;
+  /** 单季同比（Tushare q_netprofit_yoy / q_gr_yoy）；旧数据没有 */
+  quarterEarningsGrowth?: number | null;
+  quarterRevenueGrowth?: number | null;
 }
 
 export interface AggregateMetricResult {
@@ -126,7 +129,7 @@ export function weightedMedian(rows: Array<{ value: number; weight: number }>): 
 }
 
 export function aggregateFundamentalMetric(
-  metricKey: Extract<CanonicalMetricKey, "ROE" | "EARNINGS_GROWTH" | "REVENUE_GROWTH" | "INDEX_EARNINGS_GROWTH">,
+  metricKey: Extract<CanonicalMetricKey, "ROE" | "EARNINGS_GROWTH" | "REVENUE_GROWTH" | "INDEX_EARNINGS_GROWTH" | "EARNINGS_GROWTH_Q" | "REVENUE_GROWTH_Q" | "INDEX_EARNINGS_GROWTH_Q">,
   weights: IndexWeightPoint[],
   fundamentals: EquityFundamentalSnapshot[],
   evaluationDate: string,
@@ -142,7 +145,11 @@ export function aggregateFundamentalMetric(
     }
   }
   const { totalWeight, weights: validWeights } = activeWeights(weights);
-  const field = metricKey === "ROE" ? "roe" : metricKey === "REVENUE_GROWTH" ? "revenueGrowth" : "earningsGrowth";
+  const field = metricKey === "ROE" ? "roe"
+    : metricKey === "REVENUE_GROWTH" ? "revenueGrowth"
+      : metricKey === "REVENUE_GROWTH_Q" ? "quarterRevenueGrowth"
+        : metricKey === "EARNINGS_GROWTH_Q" || metricKey === "INDEX_EARNINGS_GROWTH_Q" ? "quarterEarningsGrowth"
+          : "earningsGrowth";
   const usable = validWeights.flatMap((weight) => {
     const snapshot = latestBySymbol.get(weight.constituentSymbol);
     const value = snapshot?.[field];

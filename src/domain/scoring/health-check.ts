@@ -110,11 +110,11 @@ function toPoint(point: HistoricalObservation): HealthCheckPoint {
 function consecutiveNegative(
   key: string,
   label: string,
+  rule: string,
   series: MetricSeries | undefined,
   evaluationDate: string,
   config: ScoringConfig,
 ): HealthCheckResult {
-  const rule = "最近两期（相隔约一个季度）同比都为负";
   const base = { key, label, rule, latest: null, previous: null } as const;
   const history = series?.history ?? [];
   const latestPoint = history.at(-1);
@@ -127,6 +127,26 @@ function consecutiveNegative(
   if (!previousPoint) return { ...base, latest, status: "MISSING", note: "缺少上一期（约一个季度前）的对照值" };
   const previous = toPoint(previousPoint);
   return { ...base, latest, previous, status: latest.value < 0 && previous.value < 0 ? "BREACH" : "OK" };
+}
+
+/**
+ * 增速类检查优先看单季同比（2026-10-31）：累计同比（如前三季度合计比去年同期）会把季度转折冲淡，
+ * 晚一两个季度才转负——2026 年沪深300 半年报 +26%、前三季度 +10%，第三季度单季很可能已经下滑。
+ * 单季序列给不出「最新 + 上一期」时（库里还没有单季汇总），退回累计同比，标签上注明用的哪种。
+ */
+function growthCheck(
+  key: string,
+  label: string,
+  quarter: MetricSeries | undefined,
+  cumulative: MetricSeries | undefined,
+  evaluationDate: string,
+  config: ScoringConfig,
+): HealthCheckResult {
+  if (quarter && quarter.history.length > 0) {
+    const result = consecutiveNegative(key, `${label}（单季）`, "最近两个季度的单季同比都为负", quarter, evaluationDate, config);
+    if (result.status !== "MISSING") return result;
+  }
+  return consecutiveNegative(key, `${label}（累计）`, "最近两期（相隔约一个季度）累计同比都为负", cumulative, evaluationDate, config);
 }
 
 function scoreFloor(
@@ -158,16 +178,16 @@ function checksFor(input: AssetModelInput, config: ScoringConfig): HealthCheckRe
         return [scoreFloor("fundamentalOverride", "手工基本面判断", input.fundamentalOverride, config.thresholds.fundamentalCircuitBreaker, input.asOf, config)];
       }
       return [
-        consecutiveNegative("earningsGrowth", "盈利同比", input.earningsGrowth, input.asOf, config),
+        growthCheck("earningsGrowth", "盈利同比", input.earningsGrowthQuarter, input.earningsGrowth, input.asOf, config),
         scoreFloor("dividendStability", "分红稳定性", input.dividendStability, config.healthCheck.dividendStabilityFloor, input.asOf, config),
       ];
     case "TECH_GROWTH":
       return [
-        consecutiveNegative("earningsGrowth", "盈利同比", input.earningsGrowth, input.asOf, config),
-        consecutiveNegative("revenueGrowth", "营收同比", input.revenueGrowth, input.asOf, config),
+        growthCheck("earningsGrowth", "盈利同比", input.earningsGrowthQuarter, input.earningsGrowth, input.asOf, config),
+        growthCheck("revenueGrowth", "营收同比", input.revenueGrowthQuarter, input.revenueGrowth, input.asOf, config),
       ];
     case "BROAD_EQUITY":
-      return [consecutiveNegative("indexEarningsGrowth", "指数盈利同比", input.indexEarningsGrowth, input.asOf, config)];
+      return [growthCheck("indexEarningsGrowth", "指数盈利同比", input.indexEarningsGrowthQuarter, input.indexEarningsGrowth, input.asOf, config)];
     case "GOLD":
       // 黄金没有经营基本面；宏观支持度（实际利率、美元、资金流）只作展示参考，不参与体检
       return null;

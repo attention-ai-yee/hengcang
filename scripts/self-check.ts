@@ -32,6 +32,7 @@ const BUCKET_NAMES = { GOLD: "黄金", VALUE_DIVIDEND: "红利与价值", TECH_G
 type Bucket = keyof typeof BUCKET_NAMES;
 const EQUITY_BUCKETS: Bucket[] = ["VALUE_DIVIDEND", "TECH_GROWTH", "BROAD_EQUITY"];
 const GROWTH_KEY: Record<string, string> = { VALUE_DIVIDEND: "EARNINGS_GROWTH", TECH_GROWTH: "EARNINGS_GROWTH", BROAD_EQUITY: "INDEX_EARNINGS_GROWTH" };
+const QUARTER_GROWTH_KEY: Record<string, string> = { VALUE_DIVIDEND: "EARNINGS_GROWTH_Q", TECH_GROWTH: "EARNINGS_GROWTH_Q", BROAD_EQUITY: "INDEX_EARNINGS_GROWTH_Q" };
 
 async function main() {
   const databaseFile = path.resolve(process.env.DATABASE_URL ?? "./data/hengcang.db");
@@ -104,7 +105,8 @@ async function main() {
     }
     const meta = JSON.parse(String(row.metadata_json ?? "{}")) as { reportPeriod?: string; reportPeriodShare?: number; constituentCoverage?: number };
     const ageDays = Math.round(yearsBetween(String(row.as_of), today) * 365.25);
-    const detail = `最新 ${row.as_of}：增速中位数 ${Number(row.value).toFixed(2)}%，以 ${meta.reportPeriod ?? "未知"} 为主（占 ${meta.reportPeriodShare !== undefined ? (meta.reportPeriodShare * 100).toFixed(0) + "%" : "未记录，需全量回填"}），覆盖 ${meta.constituentCoverage !== undefined ? (meta.constituentCoverage * 100).toFixed(0) + "%" : "未知"}`;
+    const quarter = sqlite.get("select value from metric_observations where subject_id = ? and metric_key = ? and provider = 'tushare-index-aggregate' and as_of = ?", bucket, QUARTER_GROWTH_KEY[bucket], row.as_of);
+    const detail = `最新 ${row.as_of}：增速中位数 累计 ${Number(row.value).toFixed(2)}% / 单季 ${quarter ? `${Number(quarter.value).toFixed(2)}%` : "无（需全量回填）"}，以 ${meta.reportPeriod ?? "未知"} 为主（占 ${meta.reportPeriodShare !== undefined ? (meta.reportPeriodShare * 100).toFixed(0) + "%" : "未记录，需全量回填"}），覆盖 ${meta.constituentCoverage !== undefined ? (meta.constituentCoverage * 100).toFixed(0) + "%" : "未知"}`;
     report(ageDays > staleDays ? "WARN" : meta.reportPeriodShare === undefined ? "WARN" : "OK", name, ageDays > staleDays ? `${detail}；已 ${ageDays} 天没更新` : detail);
   }
   const fina = sqlite.get("select last_success_at, last_error_message from data_source_status where provider = 'tushare-fina'");

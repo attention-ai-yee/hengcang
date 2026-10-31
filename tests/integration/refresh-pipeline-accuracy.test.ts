@@ -86,7 +86,7 @@ const fakeTushare = {
         const announced = new Date(Date.parse(`${reportPeriod}T00:00:00Z`) + 25 * 86_400_000).toISOString().slice(0, 10);
         if (announced > EVAL) continue;
         const growth = 12 + 4 * Math.sin(year * 4 + quarter);
-        reports.push({ symbol, reportPeriod, availableAt: `${announced}T08:00:00+08:00`, roe: 10, earningsGrowth: growth, revenueGrowth: growth + 3 });
+        reports.push({ symbol, reportPeriod, availableAt: `${announced}T08:00:00+08:00`, roe: 10, earningsGrowth: growth, revenueGrowth: growth + 3, quarterEarningsGrowth: growth - 3, quarterRevenueGrowth: growth });
       }
     }
     return ok(reports);
@@ -197,6 +197,14 @@ describe("刷新 + 评分全链路核算（合成数据，测试内独立重算�
     const trend = expectedTrend(symbol);
     expect(row.trendScore).toBe(trend);
     expect(row.opportunityScore).toBe(round1((cheapness * 0.7 + trend * 0.3) / 1.0));
+  });
+
+  it("增速体检用单季同比（全量回填算出完整的单季历史，上一期可比）", () => {
+    for (const [bucket, label] of [["BROAD_EQUITY", "指数盈利同比（单季）"], ["TECH_GROWTH", "盈利同比（单季）"], ["VALUE_DIVIDEND", "盈利同比（单季）"]] as const) {
+      const health = (JSON.parse(latestSnapshot(bucket).row.componentsJson) as { fundamentalHealth: { checks: Array<{ label: string; status: string; previous: unknown }> } }).fundamentalHealth;
+      expect(health.checks[0]).toMatchObject({ label, status: "OK" });
+      expect(health.checks[0].previous).not.toBeNull();
+    }
   });
 
   it("红利便宜程度：股息率用成分股汇总（唯一来源）；PE 仍用官方口径", () => {

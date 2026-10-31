@@ -27,7 +27,7 @@ const FETCHED_AT = "2026-10-25T10:00:00.000Z";
 const TECH_PROXY: TushareScoreProxy = { bucket: "TECH_GROWTH", label: "创业板指", symbol: "399006.SZ", instrumentKind: "INDEX", valuationMetrics: [] };
 
 function report(symbol: string, reportPeriod: string, announced: string, earningsGrowth: number, revenueGrowth: number): EquityFundamentalSnapshot {
-  return { symbol, reportPeriod, availableAt: `${announced}T08:00:00+08:00`, roe: 8, earningsGrowth, revenueGrowth };
+  return { symbol, reportPeriod, availableAt: `${announced}T08:00:00+08:00`, roe: 8, earningsGrowth, revenueGrowth, quarterEarningsGrowth: earningsGrowth - 5, quarterRevenueGrowth: revenueGrowth - 1 };
 }
 
 const REPORTS: EquityFundamentalSnapshot[] = [
@@ -95,6 +95,14 @@ describe("refreshFundamentals 增量模式", () => {
     expect(bucketGrowthRows(rows, "REVENUE_GROWTH").map((row) => row.asOf)).toEqual(["2026-08-15", "2026-08-28", "2026-10-15", "2026-10-20"]);
     // 个股层面的财报全部入库（幂等 upsert），供以后按持仓做体检
     expect(rows.filter((row) => row.subjectType === "INSTRUMENT" && row.metricKey === "EARNINGS_GROWTH")).toHaveLength(REPORTS.length);
+  });
+
+  it("库里还没有单季汇总时（升级后第一次增量），单季口径把窗口内的日期都算一遍，体检马上有上一期可比", async () => {
+    const rows = await refreshFundamentals(fakeProvider, [TECH_PROXY], "2026-10-25", { start: "2025-07-25", end: "2026-10-25" }, "INCREMENTAL", [], FETCHED_AT);
+    expect(bucketGrowthRows(rows, "EARNINGS_GROWTH").map((row) => row.asOf)).toEqual(["2026-08-15", "2026-08-28", "2026-10-15", "2026-10-20"]);
+    expect(bucketGrowthRows(rows, "EARNINGS_GROWTH_Q").map((row) => [row.asOf, row.value, row.reportPeriod])).toEqual([
+      ["2026-04-28", -5, "2026-03-31"], ["2026-08-15", -10, "2026-06-30"], ["2026-08-28", -15, "2026-06-30"], ["2026-10-15", -20, "2026-09-30"], ["2026-10-20", -25, "2026-09-30"],
+    ]);
   });
 
   it("全量模式重算全部可算的日期（覆盖率不足 60% 的 2026-04-25 不出行）", async () => {

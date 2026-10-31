@@ -12,6 +12,10 @@ export const METRIC_CATALOG = {
   ROE: { label: "净资产收益率", defaultUnit: "percent" },
   EARNINGS_REVISION: { label: "盈利预期修正", defaultUnit: "percent" },
   INDEX_EARNINGS_GROWTH: { label: "指数盈利增长", defaultUnit: "percent" },
+  // 单季同比（2026-10-31）：体检看单季，累计同比会把季度转折冲淡、晚一两个季度才转负
+  EARNINGS_GROWTH_Q: { label: "盈利增长（单季同比）", defaultUnit: "percent" },
+  REVENUE_GROWTH_Q: { label: "营收增长（单季同比）", defaultUnit: "percent" },
+  INDEX_EARNINGS_GROWTH_Q: { label: "指数盈利增长（单季同比）", defaultUnit: "percent" },
   // v2：价格 ÷ PE 推算的盈利增长只作参考（财报季之间的近似），不进入评分和基本面体检，
   // 也不再和成分股财报汇总口径混在同一条序列里（docs/hengcang_v2_*.md §2）。
   EARNINGS_GROWTH_DERIVED: { label: "价格/PE 推算盈利增长（仅参考）", defaultUnit: "percent" },

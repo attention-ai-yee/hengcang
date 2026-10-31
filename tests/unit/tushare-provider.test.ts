@@ -58,7 +58,7 @@ describe("Tushare canonical adapter", () => {
   });
 
   it("财务指标：同一报告期同一公告日有修正前后两条时只留 update_flag = 1 的（不论顺序）", async () => {
-    const fields = ["ts_code", "ann_date", "end_date", "roe", "netprofit_yoy", "tr_yoy", "or_yoy", "q_sales_yoy", "update_flag"];
+    const fields = ["ts_code", "ann_date", "end_date", "roe", "netprofit_yoy", "tr_yoy", "q_netprofit_yoy", "q_gr_yoy", "update_flag"];
     const original = ["600900.SH", "20260430", "20260331", 3.1, 25.0, 5.0, null, null, "0"];
     const revised = ["600900.SH", "20260430", "20260331", 3.2, 30.5, 6.0, null, null, "1"];
     const annual = ["600900.SH", "20260430", "20251231", 15.0, 6.17, 4.0, null, null, "0"];
@@ -72,7 +72,7 @@ describe("Tushare canonical adapter", () => {
   });
 
   it("接口层限流（HTTP 200 + 「每分钟最多访问该接口」）等一会儿重拉同一页，不再把那只股票的财报丢掉", async () => {
-    const fields = ["ts_code", "ann_date", "end_date", "roe", "netprofit_yoy", "tr_yoy", "or_yoy", "q_sales_yoy", "update_flag"];
+    const fields = ["ts_code", "ann_date", "end_date", "roe", "netprofit_yoy", "tr_yoy", "q_netprofit_yoy", "q_gr_yoy", "update_flag"];
     let calls = 0;
     vi.stubGlobal("fetch", vi.fn(async () => {
       calls += 1;
@@ -86,6 +86,16 @@ describe("Tushare canonical adapter", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.map((row) => [row.reportPeriod, row.earningsGrowth])).toEqual([["2026-09-30", 8.5]]);
+  });
+
+  it("财务指标带上单季同比（q_netprofit_yoy、q_gr_yoy，接口默认不返回，要点名）", async () => {
+    const { requests } = mockTushare({
+      fields: ["ts_code", "ann_date", "end_date", "roe", "netprofit_yoy", "tr_yoy", "q_netprofit_yoy", "q_gr_yoy", "update_flag"],
+      items: [["000001.SZ", "20261025", "20260930", 9, 10.3, 6, -21.5, 1.2, "1"]],
+    });
+    const result = await new TushareProvider("test-token", 0).getEquityFundamentals("000001.SZ", { start: "2025-10-30", end: "2026-10-30" });
+    expect(JSON.parse(String(requests[0]?.init?.body)).fields).toContain("q_netprofit_yoy");
+    expect(result.ok && result.data[0]).toMatchObject({ earningsGrowth: 10.3, revenueGrowth: 6, quarterEarningsGrowth: -21.5, quarterRevenueGrowth: 1.2 });
   });
 
   it("一直限流：重试几轮后如实返回 RATE_LIMITED", async () => {

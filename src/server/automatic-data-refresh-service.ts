@@ -197,7 +197,19 @@ export function selectAggregationDates(snapshotDates: string[], lastAggregateAsO
   return [...new Set(snapshotDates)].filter((date) => from === null || date > from).sort();
 }
 
-function lastAggregateAsOf(bucket: ScorableAssetBucket): string | null {
+/** 各桶的累计口径汇总与单季口径汇总（2026-10-31 新增，体检看单季） */
+const CUMULATIVE_KEYS: Record<Exclude<ScorableAssetBucket, "GOLD">, Array<Parameters<typeof aggregateFundamentalMetric>[0]>> = {
+  VALUE_DIVIDEND: ["ROE", "EARNINGS_GROWTH"],
+  TECH_GROWTH: ["EARNINGS_GROWTH", "REVENUE_GROWTH"],
+  BROAD_EQUITY: ["INDEX_EARNINGS_GROWTH"],
+};
+const QUARTER_KEYS: Record<Exclude<ScorableAssetBucket, "GOLD">, Array<Parameters<typeof aggregateFundamentalMetric>[0]>> = {
+  VALUE_DIVIDEND: ["EARNINGS_GROWTH_Q"],
+  TECH_GROWTH: ["EARNINGS_GROWTH_Q", "REVENUE_GROWTH_Q"],
+  BROAD_EQUITY: ["INDEX_EARNINGS_GROWTH_Q"],
+};
+
+function lastAggregateAsOf(bucket: ScorableAssetBucket, metricKeys: string[]): string | null {
   const rows = getDatabase()
     .select({ asOf: metricObservations.asOf })
     .from(metricObservations)
@@ -205,7 +217,7 @@ function lastAggregateAsOf(bucket: ScorableAssetBucket): string | null {
       eq(metricObservations.subjectType, "ASSET_BUCKET"),
       eq(metricObservations.subjectId, bucket),
       eq(metricObservations.provider, AGGREGATE_PROVIDER),
-      inArray(metricObservations.metricKey, ["ROE", "EARNINGS_GROWTH", "REVENUE_GROWTH", "INDEX_EARNINGS_GROWTH"]),
+      inArray(metricObservations.metricKey, metricKeys),
     ))
     .all();
   return rows.reduce<string | null>((latest, row) => (!latest || row.asOf > latest ? row.asOf : latest), null);
@@ -415,18 +427,18 @@ export async function refreshFundamentals(provider: Pick<TushareProvider, "getEq
     for (const row of result.data) for (const [metricKey, value] of [["ROE", row.roe], ["EARNINGS_GROWTH", row.earningsGrowth], ["REVENUE_GROWTH", row.revenueGrowth]] as const) if (value !== null) output.push({ subjectType: "INSTRUMENT", subjectId: symbol, metricKey, value: value.toFixed(8), unit: "percent", provider: "tushare", observedAt: `${row.reportPeriod}T23:59:59+08:00`, availableAt: row.availableAt, asOf: row.reportPeriod, fetchedAt, quality: "VALID" });
   }
   const snapshotDates = snapshots.map((row) => row.availableAt.slice(0, 10)).filter((date) => date <= evaluationDate);
-  for (const proxy of proxies.filter((item) => item.bucket !== "GOLD")) for (const date of selectAggregationDates(snapshotDates, mode === "INCREMENTAL" ? lastAggregateAsOf(proxy.bucket) : null)) {
-    const weightInfo = readWeightsWithAge(proxy.symbol, date, warnings); if (!weightInfo) continue;
-    const weights = weightInfo.points;
-    const metrics = degradeQuality(
-      proxy.bucket === "VALUE_DIVIDEND"
-        ? [aggregateFundamentalMetric("ROE", weights, snapshots, date), aggregateFundamentalMetric("EARNINGS_GROWTH", weights, snapshots, date)]
-        : proxy.bucket === "TECH_GROWTH"
-          ? [aggregateFundamentalMetric("EARNINGS_GROWTH", weights, snapshots, date), aggregateFundamentalMetric("REVENUE_GROWTH", weights, snapshots, date)]
-          : [aggregateFundamentalMetric("INDEX_EARNINGS_GROWTH", weights, snapshots, date)],
-      weightInfo.stale,
-    );
-    output.push(...aggregateRows(proxy.bucket, metrics, date, fetchedAt));
+  for (const proxy of proxies.filter((item) => item.bucket !== "GOLD")) {
+    const bucket = proxy.bucket as Exclude<ScorableAssetBucket, "GOLD">;
+    // 两种口径各自决定要算哪些日期：库里还没有单季汇总时（升级后第一次增量刷新），单季口径把窗口内的日期都算一遍，
+    // 体检马上有「上一期」可比；累计口径照旧只重算最近 30 天，不覆盖全量回填算好的历史。
+    const cumulativeDates = new Set(selectAggregationDates(snapshotDates, mode === "INCREMENTAL" ? lastAggregateAsOf(bucket, CUMULATIVE_KEYS[bucket]) : null));
+    const quarterDates = new Set(selectAggregationDates(snapshotDates, mode === "INCREMENTAL" ? lastAggregateAsOf(bucket, QUARTER_KEYS[bucket]) : null));
+    for (const date of [...new Set([...cumulativeDates, ...quarterDates])].sort()) {
+      const weightInfo = readWeightsWithAge(proxy.symbol, date, warnings); if (!weightInfo) continue;
+      const keys = [...(cumulativeDates.has(date) ? CUMULATIVE_KEYS[bucket] : []), ...(quarterDates.has(date) ? QUARTER_KEYS[bucket] : [])];
+      const metrics = degradeQuality(keys.map((key) => aggregateFundamentalMetric(key, weightInfo.points, snapshots, date)), weightInfo.stale);
+      output.push(...aggregateRows(proxy.bucket, metrics, date, fetchedAt));
+    }
   }
   return output;
 }

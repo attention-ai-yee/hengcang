@@ -74,5 +74,15 @@ describe("增长率按加权中位数汇总（2026-10-30 真实数据复查）",
     expect(result.reportPeriod).toBe("2026-09-30");
     expect(result.reportPeriodShare).toBe(0.5);
   });
-});
 
+  it("单季同比用单季字段汇总（加权中位数），累计同比不受影响", () => {
+    const weights = ["A", "B", "C"].map((symbol, index) => ({ indexSymbol: "X", effectiveDate: "2026-09-30", constituentSymbol: symbol, weight: [0.5, 0.3, 0.2][index] }));
+    const report = (symbol: string, cumulative: number, quarter: number) => ({ symbol, reportPeriod: "2026-09-30", availableAt: "2026-10-25T08:00:00+08:00", roe: 10, earningsGrowth: cumulative, revenueGrowth: cumulative, quarterEarningsGrowth: quarter, quarterRevenueGrowth: quarter + 1 });
+    const reports = [report("A", 10, -20), report("B", 12, -5), report("C", 30, 15)];
+    // A 的权重正好一半：取 A、B 两家的平均
+    expect(aggregateFundamentalMetric("EARNINGS_GROWTH", weights, reports, "2026-10-30").value).toBe(11);
+    expect(aggregateFundamentalMetric("EARNINGS_GROWTH_Q", weights, reports, "2026-10-30").value).toBe(-12.5);
+    expect(aggregateFundamentalMetric("INDEX_EARNINGS_GROWTH_Q", weights, reports, "2026-10-30").value).toBe(-12.5);
+    expect(aggregateFundamentalMetric("REVENUE_GROWTH_Q", weights, reports, "2026-10-30").value).toBe(-11.5);
+  });
+});

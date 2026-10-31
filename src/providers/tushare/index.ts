@@ -250,7 +250,7 @@ export class TushareProvider implements MarketDataProvider {
   }
 
   async getEquityFundamentals(symbol: string, range: { start: string; end: string }): Promise<ProviderResult<EquityFundamentalSnapshot[]>> {
-    const result = await this.rows("fina_indicator", { ts_code: symbol, start_date: compactDate(range.start), end_date: compactDate(range.end) }, "ts_code,ann_date,end_date,roe,netprofit_yoy,tr_yoy,or_yoy,q_sales_yoy,update_flag", (row) => {
+    const result = await this.rows("fina_indicator", { ts_code: symbol, start_date: compactDate(range.start), end_date: compactDate(range.end) }, "ts_code,ann_date,end_date,roe,netprofit_yoy,tr_yoy,q_netprofit_yoy,q_gr_yoy,update_flag", (row) => {
       const reportPeriod = dayFromTushare(row.end_date);
       const announced = dayFromTushare(row.ann_date ?? row.end_date);
       if (reportPeriod.length !== 10 || announced.length !== 10) return [];
@@ -258,6 +258,8 @@ export class TushareProvider implements MarketDataProvider {
         snapshot: {
           symbol: String(row.ts_code ?? symbol), reportPeriod, availableAt: `${announced}T08:00:00+08:00`, roe: numericOrNull(row.roe),
           earningsGrowth: numericOrNull(row.netprofit_yoy), revenueGrowth: numericOrNull(row.tr_yoy),
+          // 单季同比：q_netprofit_yoy（归母净利润）、q_gr_yoy（营业总收入，与累计的 tr_yoy 同口径）；接口默认不返回，要点名
+          quarterEarningsGrowth: numericOrNull(row.q_netprofit_yoy), quarterRevenueGrowth: numericOrNull(row.q_gr_yoy),
         },
         revised: String(row.update_flag ?? "") === "1",
       }];

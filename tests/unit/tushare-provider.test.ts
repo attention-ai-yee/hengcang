@@ -96,14 +96,20 @@ describe("Tushare canonical adapter", () => {
     expect(result.error.code).toBe("RATE_LIMITED");
   });
 
-  it("IP 数量超限不重试（等也没用），如实返回", async () => {
+  it("IP 数量超限不重试（等也没用），如实返回；本次运行之后的调用不再发请求", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ code: 40101, msg: "您的IP数量超限，最大数量为10个！", data: null }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    const result = await new TushareProvider("test-token", 0).getEquityFundamentals("600900.SH", { start: "2025-10-30", end: "2026-10-30" });
+    const provider = new TushareProvider("test-token", 0);
+    const result = await provider.getEquityFundamentals("600900.SH", { start: "2025-10-30", end: "2026-10-30" });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.message).toContain("IP数量超限");
+    const next = await provider.getPriceSeries({ symbol: "000300.SH", instrumentKind: "INDEX", range: { start: "2026-10-01", end: "2026-10-30" } });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(next.ok).toBe(false);
+    if (next.ok) return;
+    expect(next.error.message).toContain("不再调用");
   });
 
   it("不再把 Tushare us_trycr 伪标为实际利率", async () => {

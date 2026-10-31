@@ -15,7 +15,10 @@ export class TushareRateLimiter {
   constructor(options: TushareRateLimiterOptions = {}) {
     // 环境变量钳位（Code Review M6）：空串/非数字/超界都不允许——RPM=0 会让 acquire 死循环挂起。
     this.maxRequestsPerMinute = clampInt(process.env.TUSHARE_MAX_RPM ?? options.maxRequestsPerMinute, 120, 1, 600);
-    this.concurrency = clampInt(process.env.TUSHARE_CONCURRENCY ?? options.concurrency, 3, 1, 16);
+    // 默认一次只发一个请求（2026-10-31）：顺序请求复用同一条长连接，出口 IP 按连接分配的环境
+    // （云端、部分代理）里 Tushare 也只看到一个 IP；并发会开多条连接、各走一个 IP，
+    // 一个 token 最多 10 个 IP，2026-10-30 就这样被锁过。受 RPM 上限约束，并发对总耗时帮助不大。
+    this.concurrency = clampInt(process.env.TUSHARE_CONCURRENCY ?? options.concurrency, 1, 1, 16);
     this.retries = Math.min(Math.max(options.retries ?? 2, 0), 5);
   }
 

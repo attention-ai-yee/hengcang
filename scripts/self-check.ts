@@ -112,9 +112,11 @@ async function main() {
 
   // 4. 用当前代码重算最新一次评分，和库里的对比（只比分数；状态还取决于仓位）
   const { ScoreInputBuilder } = await import("../src/domain/scoring/input-builder");
-  const { calculateAssetScore, DEFAULT_SCORING_CONFIG } = await import("../src/domain/scoring");
+  const { calculateAssetScore, DEFAULT_SCORING_CONFIG, formatHealthPoint } = await import("../src/domain/scoring");
+  const { STATE_LABELS } = await import("../src/lib/presentation");
+  type HealthCheckPoint = Parameters<typeof formatHealthPoint>[0];
   for (const bucket of Object.keys(BUCKET_NAMES) as Bucket[]) {
-    const snapshot = sqlite.get("select as_of, cheapness_score, trend_score, opportunity_score, components_json from score_snapshots where asset_bucket = ? order by as_of desc limit 1", bucket);
+    const snapshot = sqlite.get("select as_of, cheapness_score, trend_score, opportunity_score, recommendation_state, confidence, components_json from score_snapshots where asset_bucket = ? order by as_of desc limit 1", bucket);
     const name = `${BUCKET_NAMES[bucket]}评分复算`;
     if (!snapshot) {
       report("FAIL", name, "库里没有评分");
@@ -125,11 +127,15 @@ async function main() {
     const result = calculateAssetScore(input);
     const modelVersion = (JSON.parse(String(snapshot.components_json)) as { modelVersion?: number }).modelVersion;
     const same = result.cheapnessScore === snapshot.cheapness_score && result.trendScore === snapshot.trend_score && result.opportunityScore === snapshot.opportunity_score;
+    const stored = JSON.parse(String(snapshot.components_json)) as { fundamentalHealth?: { status?: string; checks?: Array<{ label: string; latest: HealthCheckPoint | null; previous: HealthCheckPoint | null }> } };
+    const health = stored.fundamentalHealth;
+    const checks = (health?.checks ?? []).map((check) => `${check.label} ${check.latest ? formatHealthPoint(check.latest) : "—"}；上一期 ${check.previous ? formatHealthPoint(check.previous) : "—"}`).join("；");
     if (same) {
       report("OK", name, `${asOf}：便宜程度 ${result.cheapnessScore}，趋势 ${result.trendScore}，配置吸引力 ${result.opportunityScore}，与库里一致（第 ${DEFAULT_SCORING_CONFIG.version} 版算法）`);
     } else {
       report("WARN", name, `${asOf}：库里 便宜程度 ${snapshot.cheapness_score} / 趋势 ${snapshot.trend_score} / 配置吸引力 ${snapshot.opportunity_score}（第 ${modelVersion ?? "?"} 版算法），按当前代码重算是 ${result.cheapnessScore} / ${result.trendScore} / ${result.opportunityScore}；刷新一次（pnpm data:refresh）就会更新`);
     }
+    console.log(`    状态 ${STATE_LABELS[String(snapshot.recommendation_state) as keyof typeof STATE_LABELS] ?? snapshot.recommendation_state}（可信度 ${snapshot.confidence}）；体检 ${health?.status ?? "—"}${checks ? `：${checks}` : ""}`);
   }
 
   // 5. DeepSeek：搜索、读网页、模型

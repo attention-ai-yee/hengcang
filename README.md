@@ -54,6 +54,8 @@ pnpm dev
 4. 可选：在 `.env.local` 填 `DEEPSEEK_API_KEY` 开启 AI 新闻监控，重启 `pnpm dev`，并常驻 `pnpm worker`。
 5. 在「持仓与风险」里给单一个股和主题 ETF 写投资逻辑和失效条件（可以先点「让 AI 起草」，改好再保存）。股票账户如果还是一条汇总记录，先拆成具体持仓。
 
+本机没有开发环境、在 Claude 云端会话里运行时，按 [docs/cloud-verification.md](docs/cloud-verification.md) 做。
+
 要回退：停服务，`git checkout` 回升级前的提交（v2 之前是 `8ef4160`），把备份拷回 `data/hengcang.db`。
 
 ## 常用命令
@@ -82,7 +84,7 @@ pnpm self-check    # 用真实接口核对数据与计算（只读）：行情�
 | `DATABASE_URL` | SQLite 文件路径，默认 `./data/hengcang.db` |
 | `REFRESH_TOKEN` | 可选：配置后 `/api/data/refresh` 与 `/api/backtest/run` 要求 Bearer 令牌；页面按钮走同源 server action，不受影响 |
 | `TUSHARE_TOKEN` | A 股、ETF、基金等 Tushare 数据 |
-| `TUSHARE_MAX_RPM` / `TUSHARE_CONCURRENCY` | 可选：Tushare 每分钟请求数（默认 120）与并发（默认 3）；留空按默认值 |
+| `TUSHARE_MAX_RPM` / `TUSHARE_CONCURRENCY` | 可选：Tushare 每分钟请求数（默认 120）与并发（默认 1：一次一个请求，复用同一条连接；在出口 IP 会变的环境里调大会占用多个 IP 名额）；留空按默认值 |
 | `FRED_API_KEY` | FRED 宏观序列 |
 | `TWELVE_DATA_API_KEY` | 黄金代理与全球行情 |
 | `DEEPSEEK_API_KEY` | AI 新闻监控：DeepSeek 搜索、抓取与模型共用一个 Key |
@@ -184,4 +186,5 @@ OpportunityScore = 70% × Cheapness + 30% × Trend
 - [v2 设计说明](docs/hengcang_v2_allocation_fundamentals_thesis.md)：默认配置、财报数据、基本面体检、投资逻辑、AI 新闻监控、升级步骤
 - [自动数据刷新](docs/automatic-data-refresh.md)、[Manual 指标导入](docs/manual-observation-import.md)
 - [趋势 v1.3 与科技 v1.4](docs/hengcang_trend_v1_3_tech_v1_4.md)、[黄金模型 v1.2](docs/hengcang_gold_model_revision_v1_2.md)（宏观闸门已在 v2 删除）
+- [在云端会话里用真实数据验证](docs/cloud-verification.md)：本机没有开发环境时的做法（Tushare 只能用一条连接）
 - [代码审查记录](CODE_REVIEW.md)

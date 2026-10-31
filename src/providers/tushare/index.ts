@@ -74,6 +74,8 @@ function qualityFromTruncation(truncated: boolean): "VALID" | "PARTIAL" {
 export class TushareProvider implements MarketDataProvider {
   readonly id = "tushare";
   private readonly limiter = new TushareRateLimiter();
+  /** Tushare 提示 IP 数量超限后，本次运行不再发请求（再试只会占更多名额） */
+  private blockedReason: string | null = null;
 
   constructor(
     private readonly token = process.env.TUSHARE_TOKEN,
@@ -320,6 +322,7 @@ export class TushareProvider implements MarketDataProvider {
    * 由调用方降级 PARTIAL。
    */
   private async query(apiName: string, params: Record<string, string>, fields: string): Promise<{ response: TushareResponse; truncated: boolean }> {
+    if (this.blockedReason) return { response: { code: -1, msg: this.blockedReason }, truncated: false };
     const items: Array<Array<string | number | null>> = [];
     let responseFields: string[] | undefined;
     let rateLimitWaits = 0;
@@ -338,6 +341,7 @@ export class TushareProvider implements MarketDataProvider {
         (error) => TushareProvider.shouldRetryError(error),
       );
       if (response.code !== 0 || !response.data) {
+        if (response.msg?.includes("IP数量超限")) this.blockedReason = `${response.msg}（本次运行不再调用 Tushare）`;
         // 接口层限流（HTTP 200、code ≠ 0、「每分钟最多访问该接口 N 次」）不会抛错，限流器的重试管不到：
         // 原来直接当失败，那只成分股的财报这一轮就静默缺掉（覆盖率下降，汇总降级甚至不出）。等过这一分钟再拉同一页。
         if (failureCode(response) === "RATE_LIMITED" && rateLimitWaits < TushareProvider.RATE_LIMIT_RETRIES) {
